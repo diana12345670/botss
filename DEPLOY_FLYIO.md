@@ -42,8 +42,10 @@ fly secrets set DISCORD_TOKEN=seu_token_aqui
 
 ### 4. Fazer o deploy
 ```bash
-fly deploy
+fly deploy --ha=false
 ```
+
+**IMPORTANTE:** Use sempre `--ha=false` para economizar recursos e evitar múltiplas instâncias
 
 ### 5. Ver os logs
 ```bash

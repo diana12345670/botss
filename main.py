@@ -7,6 +7,7 @@ import asyncio
 from datetime import datetime
 from models.bet import Bet
 from utils.database import Database
+from aiohttp import web
 
 # Detectar ambiente de execução
 IS_FLYIO = os.getenv("FLY_APP_NAME") is not None
@@ -1298,20 +1299,78 @@ async def ajuda(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed)
 
 
-try:
+# ===== SERVIDOR HTTP PARA HEALTHCHECK (Fly.io/Railway) =====
+async def health_check(request):
+    """Endpoint de healthcheck para Fly.io/Railway"""
+    bot_status = "online" if bot.is_ready() else "starting"
+    return web.Response(
+        text=f"Bot Status: {bot_status}\nUptime: OK", 
+        status=200,
+        headers={'Content-Type': 'text/plain'}
+    )
+
+async def ping(request):
+    """Endpoint simples de ping"""
+    return web.Response(text="pong", status=200)
+
+async def start_web_server():
+    """Inicia servidor HTTP para healthcheck"""
+    app = web.Application()
+    app.router.add_get('/', health_check)
+    app.router.add_get('/health', health_check)
+    app.router.add_get('/ping', ping)
+    
+    runner = web.AppRunner(app)
+    await runner.setup()
+    
+    port = int(os.getenv('PORT', 8080))
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+    
+    print(f"🌐 Servidor HTTP rodando em 0.0.0.0:{port}")
+    print(f"   Endpoints: /, /health, /ping")
+    return site
+
+async def run_bot_with_webserver():
+    """Roda o bot Discord junto com o servidor web"""
     token = os.getenv("DISCORD_TOKEN") or os.getenv("TOKEN") or ""
     if token == "":
         raise Exception("Por favor, adicione seu token do Discord nas variáveis de ambiente (DISCORD_TOKEN).")
     
+    print("🚀 Iniciando bot com servidor HTTP...")
+    
+    # Iniciar servidor web ANTES do bot
+    web_server = await start_web_server()
+    
+    # Aguardar um pouco para o servidor estar pronto
+    await asyncio.sleep(1)
+    
+    print("🤖 Conectando bot ao Discord...")
+    
+    # Iniciar bot Discord
+    try:
+        await bot.start(token, reconnect=True)
+    except Exception as e:
+        print(f"❌ Erro ao iniciar bot: {e}")
+        raise
+
+
+try:
     if IS_FLYIO:
-        print("Iniciando bot no Fly.io...")
-        # log_level=40 = ERROR apenas, economiza recursos
-        bot.run(token, log_handler=None, log_level=40)
+        print("Iniciando bot no Fly.io com servidor HTTP...")
     elif IS_RAILWAY:
-        print("Iniciando bot no Railway...")
-        bot.run(token, log_handler=None, log_level=40)
+        print("Iniciando bot no Railway com servidor HTTP...")
     else:
         print("Iniciando bot no Replit/Local...")
+    
+    # Rodar bot com servidor web em ambientes de produção
+    if IS_FLYIO or IS_RAILWAY:
+        asyncio.run(run_bot_with_webserver())
+    else:
+        # No Replit/Local, rodar apenas o bot
+        token = os.getenv("DISCORD_TOKEN") or os.getenv("TOKEN") or ""
+        if token == "":
+            raise Exception("Por favor, adicione seu token do Discord nas variáveis de ambiente (DISCORD_TOKEN).")
         bot.run(token)
         
 except discord.HTTPException as e:

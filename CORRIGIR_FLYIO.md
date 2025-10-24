@@ -1,58 +1,48 @@
-# 🔧 Corrigir Erro de Timeout no Fly.io
+# 🔧 Deploy Atualizado no Fly.io
 
-## ❌ Erro que você está vendo:
-```
-Verificando https://botss.fly.dev (tentativa 3)
-Último erro: tempo limite ao tentar obter seu aplicativo
-```
+## ✅ NOVA VERSÃO - Servidor HTTP Incluído!
 
-## ✅ Solução Definitiva
+O bot agora inclui um **servidor HTTP de healthcheck** que resolve o problema de timeout!
 
-O problema é que o Fly.io está tentando fazer healthcheck HTTP, mas um bot Discord não tem servidor web.
+### O que mudou:
+- ✅ Servidor HTTP na porta 8080 (responde aos healthchecks)
+- ✅ Bot Discord + Servidor HTTP rodam juntos
+- ✅ Fly.io consegue verificar se o bot está online
+- ✅ Sem mais erros de timeout!
 
-### Opção 1: Usar Script Automático (MAIS FÁCIL)
+### Deploy (Comandos Atualizados)
+
+#### Se é a primeira vez ou quer recriar o app:
 
 ```bash
 cd nz-apostas
-chmod +x fix-flyio.sh
-./fix-flyio.sh
-```
 
-### Opção 2: Comandos Manuais (Passo a Passo)
+# 1. Se já existe, destruir app antigo
+fly apps destroy botss --yes  # ou nz-apostas-bot
 
-#### Se seu app chama "botss":
-
-```bash
-# 1. Destruir app antigo com configuração errada
-fly apps destroy botss --yes
-
-# 2. Criar novo app SEM healthchecks HTTP
+# 2. Criar novo app
 fly launch --no-deploy --ha=false --name botss --region gru
 
-# 3. IMPORTANTE: Verificar fly.toml
-cat fly.toml
-# Deve ter estas linhas:
-# kill_signal = "SIGINT"
-# kill_timeout = "5s"
-# [experimental]
-#   auto_rollback = false
-# 
-# NÃO deve ter [[services]] ou [http_service]
-
-# 4. Se fly.toml foi gerado com [[services]], remova manualmente
-# Copie o fly.toml correto deste repositório
-
-# 5. Configurar token
+# 3. Configurar token
 fly secrets set DISCORD_TOKEN=seu_token_aqui
 
-# 6. Deploy com flag --ha=false
+# 4. Deploy
 fly deploy --ha=false
 
-# 7. Garantir apenas 1 instância
+# 5. Garantir 1 instância
 fly scale count 1
 
-# 8. Ver logs
+# 6. Ver logs - deve mostrar servidor HTTP rodando!
 fly logs
+```
+
+**Logs esperados:**
+```
+✈️ Detectado ambiente Fly.io
+Iniciando bot no Fly.io com servidor HTTP...
+🌐 Servidor HTTP rodando na porta 8080 (healthcheck)
+Bot conectado como NZ apostas#1303
+9 comandos sincronizados
 ```
 
 #### Se quiser manter o nome "nz-apostas-bot":
