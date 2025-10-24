@@ -12,7 +12,7 @@ kill_timeout = "5s"
   auto_rollback = false
 
 [[vm]]
-  memory = '256mb'
+  memory = '128mb'
   cpu_kind = 'shared'
   cpus = 1
 

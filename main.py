@@ -19,10 +19,22 @@ elif IS_RAILWAY:
 else:
     print("💻 Detectado ambiente Replit/Local")
 
-intents = discord.Intents.default()
-intents.message_content = True
-intents.members = True
-intents.guilds = True
+# Configuração otimizada de intents - apenas o necessário
+intents = discord.Intents(
+    guilds=True,           # Necessário para detectar servidores
+    guild_messages=True,   # Necessário para mensagens
+    members=True,          # Necessário para menções
+    message_content=True   # Necessário para comandos
+)
+# Desabilitando eventos desnecessários para economizar RAM
+intents.presences = False
+intents.typing = False
+intents.voice_states = False
+intents.integrations = False
+intents.webhooks = False
+intents.invites = False
+intents.emojis = False
+intents.bans = False
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 db = Database()
@@ -1293,10 +1305,11 @@ try:
     
     if IS_FLYIO:
         print("Iniciando bot no Fly.io...")
-        bot.run(token, log_handler=None, root_logger=True)
+        # log_level=40 = ERROR apenas, economiza recursos
+        bot.run(token, log_handler=None, log_level=40)
     elif IS_RAILWAY:
         print("Iniciando bot no Railway...")
-        bot.run(token, log_handler=None, root_logger=True)
+        bot.run(token, log_handler=None, log_level=40)
     else:
         print("Iniciando bot no Replit/Local...")
         bot.run(token)
