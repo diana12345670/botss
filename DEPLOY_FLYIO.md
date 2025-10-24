@@ -26,12 +26,14 @@ fly auth login
 ### 2. Criar o app (primeira vez)
 ```bash
 cd nz-apostas
-fly launch --no-deploy
+fly launch --no-deploy --ha=false
 ```
 
 **IMPORTANTE:** 
 - Quando perguntar sobre PostgreSQL, digite **N** (o bot usa JSON local)
+- Quando perguntar sobre IPv4 dedicado, digite **N** (bot Discord não precisa)
 - Quando perguntar sobre deploy imediato, digite **N**
+- Após o comando, **verifique se o fly.toml NÃO tem seção [[services]] ou [http_service]]** - se tiver, remova!
 
 ### 3. Configurar o token do Discord
 ```bash
@@ -113,6 +115,22 @@ Para persistência permanente, recomenda-se:
 2. Migrar para PostgreSQL
 
 ## Troubleshooting
+
+### Erro "timeout trying to get your app" ou "health check failing"
+**Causa:** Fly.io está tentando fazer healthcheck HTTP, mas bot Discord não tem servidor web.
+
+**Solução:**
+1. Abra o arquivo `fly.toml`
+2. **Remova completamente** qualquer seção `[[services]]` ou `[http_service]`
+3. Certifique-se que o arquivo tem:
+```toml
+kill_signal = "SIGINT"
+kill_timeout = "5s"
+
+[experimental]
+  auto_rollback = false
+```
+4. Faça deploy novamente: `fly deploy --ha=false`
 
 ### Bot está respondendo em duplicado
 ```bash
