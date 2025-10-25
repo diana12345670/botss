@@ -77,6 +77,8 @@ class QueueButton(discord.ui.View):
         # Remove o botão "Entrar na Fila" se for 2v2
         if self.is_2v2:
             self.remove_item(self.join_queue_button)
+            # Ajusta o botão Sair da Fila para row=1 no 2v2
+            self.leave_queue_button.row = 1
         else:
             # Remove os botões de time se for 1v1
             self.remove_item(self.join_team1_button)
@@ -180,9 +182,11 @@ class QueueButton(discord.ui.View):
             )
             return
 
+        # Adiciona à fila ANTES de responder
         db.add_to_queue(self.queue_id, user_id)
         queue = db.get_queue(self.queue_id)
 
+        # Responde ao usuário
         embed = discord.Embed(
             title="✅ Entrou na fila",
             description=f"{self.mode.replace('-', ' ').title()} - {len(queue)}/2",
@@ -194,9 +198,36 @@ class QueueButton(discord.ui.View):
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-        # Atualiza a mensagem principal
-        await self.update_queue_message(interaction)
+        # Atualiza a mensagem principal IMEDIATAMENTE
+        try:
+            message = await interaction.channel.fetch_message(self.message_id)
 
+            # Busca os nomes dos jogadores na fila
+            player_names = []
+            for uid in queue:
+                try:
+                    member = await interaction.guild.fetch_member(uid)
+                    player_names.append(member.mention)
+                except:
+                    player_names.append(f"<@{uid}>")
+
+            players_text = "\n".join(player_names) if player_names else "Vazio"
+
+            embed_update = discord.Embed(
+                title=self.mode.replace('-', ' ').title(),
+                color=EMBED_COLOR
+            )
+            embed_update.add_field(name="Valor", value=f"R$ {self.bet_value:.2f}".replace('.', ','), inline=True)
+            embed_update.add_field(name="Fila", value=players_text, inline=True)
+            if interaction.guild.icon:
+                embed_update.set_thumbnail(url=interaction.guild.icon.url)
+            embed_update.set_footer(text=CREATOR_FOOTER)
+
+            await message.edit(embed=embed_update)
+        except Exception as e:
+            print(f"Erro ao atualizar mensagem da fila: {e}")
+
+        # Verifica se tem 2 jogadores para criar aposta
         if len(queue) >= 2:
             player1_id = queue[0]
             player2_id = queue[1]
@@ -208,72 +239,6 @@ class QueueButton(discord.ui.View):
             await self.update_queue_message(interaction)
 
             await create_bet_channel(interaction.guild, self.mode, player1_id, player2_id, self.bet_value, self.mediator_fee)
-
-    @discord.ui.button(label='Sair da Fila', style=discord.ButtonStyle.gray, row=0)
-    async def leave_queue_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        user_id = interaction.user.id
-
-        if self.is_2v2:
-            team1_queue_id = f"{self.queue_id}_team1"
-            team2_queue_id = f"{self.queue_id}_team2"
-
-            team1_queue = db.get_queue(team1_queue_id)
-            team2_queue = db.get_queue(team2_queue_id)
-
-            if user_id in team1_queue:
-                db.remove_from_queue(team1_queue_id, user_id)
-                embed = discord.Embed(
-                    title="❌ Saiu - Time 1",
-                    color=EMBED_COLOR
-                )
-                if interaction.guild.icon:
-                    embed.set_thumbnail(url=interaction.guild.icon.url)
-                embed.set_footer(text=CREATOR_FOOTER)
-                await interaction.response.send_message(embed=embed, ephemeral=True)
-                await self.update_queue_message(interaction)
-                return
-            elif user_id in team2_queue:
-                db.remove_from_queue(team2_queue_id, user_id)
-                embed = discord.Embed(
-                    title="❌ Saiu - Time 2",
-                    color=EMBED_COLOR
-                )
-                if interaction.guild.icon:
-                    embed.set_thumbnail(url=interaction.guild.icon.url)
-                embed.set_footer(text=CREATOR_FOOTER)
-                await interaction.response.send_message(embed=embed, ephemeral=True)
-                await self.update_queue_message(interaction)
-                return
-            else:
-                await interaction.response.send_message(
-                    "Você não está em nenhum time.",
-                    ephemeral=True
-                )
-                return
-        else:
-            queue = db.get_queue(self.queue_id)
-
-            if user_id not in queue:
-                await interaction.response.send_message(
-                    "Você não está nesta fila.",
-                    ephemeral=True
-                )
-                return
-
-            db.remove_from_queue(self.queue_id, user_id)
-
-            embed = discord.Embed(
-                title="❌ Saiu da fila",
-                color=EMBED_COLOR
-            )
-            if interaction.guild.icon:
-                embed.set_thumbnail(url=interaction.guild.icon.url)
-            embed.set_footer(text=CREATOR_FOOTER)
-
-            await interaction.response.send_message(embed=embed, ephemeral=True)
-
-            # Atualiza a mensagem principal
-            await self.update_queue_message(interaction)
 
     @discord.ui.button(label='Entrar no Time 1', style=discord.ButtonStyle.blurple, row=0)
     async def join_team1_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -405,6 +370,72 @@ class QueueButton(discord.ui.View):
         if len(team1_queue) == 2 and len(team2_queue) == 2:
             await self.create_2v2_match(interaction.guild, team1_queue, team2_queue)
 
+    @discord.ui.button(label='Sair da Fila', style=discord.ButtonStyle.gray, row=0)
+    async def leave_queue_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        user_id = interaction.user.id
+
+        if self.is_2v2:
+            team1_queue_id = f"{self.queue_id}_team1"
+            team2_queue_id = f"{self.queue_id}_team2"
+
+            team1_queue = db.get_queue(team1_queue_id)
+            team2_queue = db.get_queue(team2_queue_id)
+
+            if user_id in team1_queue:
+                db.remove_from_queue(team1_queue_id, user_id)
+                embed = discord.Embed(
+                    title="❌ Saiu - Time 1",
+                    color=EMBED_COLOR
+                )
+                if interaction.guild.icon:
+                    embed.set_thumbnail(url=interaction.guild.icon.url)
+                embed.set_footer(text=CREATOR_FOOTER)
+                await interaction.response.send_message(embed=embed, ephemeral=True)
+                await self.update_queue_message(interaction)
+                return
+            elif user_id in team2_queue:
+                db.remove_from_queue(team2_queue_id, user_id)
+                embed = discord.Embed(
+                    title="❌ Saiu - Time 2",
+                    color=EMBED_COLOR
+                )
+                if interaction.guild.icon:
+                    embed.set_thumbnail(url=interaction.guild.icon.url)
+                embed.set_footer(text=CREATOR_FOOTER)
+                await interaction.response.send_message(embed=embed, ephemeral=True)
+                await self.update_queue_message(interaction)
+                return
+            else:
+                await interaction.response.send_message(
+                    "Você não está em nenhum time.",
+                    ephemeral=True
+                )
+                return
+        else:
+            queue = db.get_queue(self.queue_id)
+
+            if user_id not in queue:
+                await interaction.response.send_message(
+                    "Você não está nesta fila.",
+                    ephemeral=True
+                )
+                return
+
+            db.remove_from_queue(self.queue_id, user_id)
+
+            embed = discord.Embed(
+                title="❌ Saiu da fila",
+                color=EMBED_COLOR
+            )
+            if interaction.guild.icon:
+                embed.set_thumbnail(url=interaction.guild.icon.url)
+            embed.set_footer(text=CREATOR_FOOTER)
+
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+
+            # Atualiza a mensagem principal
+            await self.update_queue_message(interaction)
+
     async def create_2v2_match(self, guild: discord.Guild, team1_queue: list, team2_queue: list):
         """Cria uma partida 2v2 quando ambos os times estão completos"""
         team1_queue_id = f"{self.queue_id}_team1"
@@ -467,11 +498,6 @@ class ConfirmPaymentButton(discord.ui.View):
             embed.set_footer(text=CREATOR_FOOTER)
             await interaction.response.send_message(embed=embed)
 
-            try:
-                await mediator.send(f"{player1.name} confirmou o pagamento na aposta {interaction.channel.mention}")
-            except:
-                pass
-
         elif user_id == bet.player2_id:
             if bet.player2_confirmed:
                 await interaction.response.send_message(
@@ -493,11 +519,6 @@ class ConfirmPaymentButton(discord.ui.View):
             )
             embed.set_footer(text=CREATOR_FOOTER)
             await interaction.response.send_message(embed=embed)
-
-            try:
-                await mediator.send(f"{player2.name} confirmou o pagamento na aposta {interaction.channel.mention}")
-            except:
-                pass
         else:
             await interaction.response.send_message(
                 "Você não é um dos jogadores desta aposta.",
@@ -580,7 +601,7 @@ class PixModal(discord.ui.Modal, title='Inserir Chave PIX'):
             perms.read_messages = True
             perms.send_messages = True
             await channel.set_permissions(interaction.user, overwrite=perms)
-            
+
             # Envia uma mensagem no canal mencionando os jogadores
             await channel.send(f"{player1.mention} {player2.mention} Um mediador aceitou a aposta! ✅")
 
@@ -605,33 +626,72 @@ class AcceptMediationButton(discord.ui.View):
         is_admin = interaction.user.guild_permissions.administrator
         has_allowed_role = discord.utils.get(interaction.user.roles, id=ALLOWED_ROLE_ID) is not None
         is_allowed_user = interaction.user.id == ALLOWED_USER_ID
-        
+
         if not is_admin and not has_allowed_role and not is_allowed_user:
             await interaction.response.send_message("Apenas administradores, membros autorizados ou usuários especiais podem aceitar mediação.", ephemeral=True)
             return
 
         await interaction.response.send_modal(PixModal(self.bet_id))
 
+    @discord.ui.button(label='Cancelar Aposta', style=discord.ButtonStyle.red)
+    async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        bet = db.get_active_bet(self.bet_id)
+
+        if not bet:
+            await interaction.response.send_message("Aposta não encontrada.", ephemeral=True)
+            return
+
+        # Verifica se é admin, tem o cargo permitido ou é o usuário especial
+        is_admin = interaction.user.guild_permissions.administrator
+        has_allowed_role = discord.utils.get(interaction.user.roles, id=ALLOWED_ROLE_ID) is not None
+        is_allowed_user = interaction.user.id == ALLOWED_USER_ID
+
+        if not is_admin and not has_allowed_role and not is_allowed_user:
+            await interaction.response.send_message("Apenas administradores, membros autorizados ou usuários especiais podem cancelar apostas.", ephemeral=True)
+            return
+
+        player1 = await interaction.guild.fetch_member(bet.player1_id)
+        player2 = await interaction.guild.fetch_member(bet.player2_id)
+
+        embed = discord.Embed(
+            title="❌ Aposta Cancelada",
+            description=f"{player1.mention} e {player2.mention}",
+            color=EMBED_COLOR
+        )
+        embed.set_footer(text=CREATOR_FOOTER)
+
+        await interaction.response.send_message(embed=embed)
+
+        bet.finished_at = datetime.now().isoformat()
+        db.finish_bet(bet)
+
+        await asyncio.sleep(10)
+
+        try:
+            await interaction.channel.delete()
+        except:
+            pass
+
 
 async def cleanup_expired_queues():
     """Tarefa em background que remove jogadores que ficaram muito tempo na fila"""
     await bot.wait_until_ready()
     print("🧹 Iniciando sistema de limpeza automática de filas (5 minutos)")
-    
+
     while not bot.is_closed():
         try:
             # Busca jogadores expirados (mais de 5 minutos na fila)
             expired_players = db.get_expired_queue_players(timeout_minutes=5)
-            
+
             if expired_players:
                 print(f"🧹 Encontrados jogadores expirados em {len(expired_players)} filas")
-                
+
                 for queue_id, user_ids in expired_players.items():
                     # Remove cada jogador expirado
                     for user_id in user_ids:
                         db.remove_from_queue(queue_id, user_id)
                         print(f"⏱️ Removido usuário {user_id} da fila {queue_id} (timeout)")
-                    
+
                     # Atualiza a mensagem da fila se possível
                     if queue_id in queue_messages:
                         channel_id, message_id, mode, bet_value = queue_messages[queue_id]
@@ -639,14 +699,14 @@ async def cleanup_expired_queues():
                             channel = bot.get_channel(channel_id)
                             if channel:
                                 message = await channel.fetch_message(message_id)
-                                
+
                                 # Verifica se é 2v2 ou 1v1
                                 is_2v2 = "2v2" in mode
-                                
+
                                 if is_2v2:
                                     team1_queue = db.get_queue(f"{queue_id}_team1")
                                     team2_queue = db.get_queue(f"{queue_id}_team2")
-                                    
+
                                     guild = channel.guild
                                     team1_names = []
                                     for uid in team1_queue:
@@ -655,7 +715,7 @@ async def cleanup_expired_queues():
                                             team1_names.append(member.mention)
                                         except:
                                             team1_names.append(f"<@{uid}>")
-                                    
+
                                     team2_names = []
                                     for uid in team2_queue:
                                         try:
@@ -663,10 +723,10 @@ async def cleanup_expired_queues():
                                             team2_names.append(member.mention)
                                         except:
                                             team2_names.append(f"<@{uid}>")
-                                    
+
                                     team1_text = "\n".join(team1_names) if team1_names else "Nenhum jogador"
                                     team2_text = "\n".join(team2_names) if team2_names else "Nenhum jogador"
-                                    
+
                                     embed = discord.Embed(
                                         title=mode.replace('-', ' ').title(),
                                         color=EMBED_COLOR
@@ -678,7 +738,7 @@ async def cleanup_expired_queues():
                                         embed.set_thumbnail(url=guild.icon.url)
                                 else:
                                     queue = db.get_queue(queue_id)
-                                    
+
                                     guild = channel.guild
                                     player_names = []
                                     for uid in queue:
@@ -687,9 +747,9 @@ async def cleanup_expired_queues():
                                             player_names.append(member.mention)
                                         except:
                                             player_names.append(f"<@{uid}>")
-                                    
+
                                     players_text = "\n".join(player_names) if player_names else "Vazio"
-                                    
+
                                     embed = discord.Embed(
                                         title=mode.replace('-', ' ').title(),
                                         color=EMBED_COLOR
@@ -698,14 +758,14 @@ async def cleanup_expired_queues():
                                     embed.add_field(name="Fila", value=players_text, inline=True)
                                     if guild.icon:
                                         embed.set_thumbnail(url=guild.icon.url)
-                                
+
                                 await message.edit(embed=embed)
                         except Exception as e:
                             print(f"Erro ao atualizar mensagem da fila {queue_id}: {e}")
-            
+
             # Aguarda 60 segundos antes de verificar novamente (economiza processamento)
             await asyncio.sleep(60)
-            
+
         except Exception as e:
             print(f"Erro na limpeza de filas: {e}")
             await asyncio.sleep(60)
@@ -721,7 +781,7 @@ async def on_ready():
         print(f'{len(synced)} comandos sincronizados')
     except Exception as e:
         print(f'Erro ao sincronizar comandos: {e}')
-    
+
     # Inicia a tarefa de limpeza automática de filas
     bot.loop.create_task(cleanup_expired_queues())
 
@@ -745,7 +805,7 @@ async def mostrar_fila(interaction: discord.Interaction, modo: app_commands.Choi
     is_admin = interaction.user.guild_permissions.administrator
     has_allowed_role = discord.utils.get(interaction.user.roles, id=ALLOWED_ROLE_ID) is not None
     is_allowed_user = interaction.user.id == ALLOWED_USER_ID
-    
+
     if not is_admin and not has_allowed_role and not is_allowed_user:
         await interaction.response.send_message(
             f"❌ Você precisa ser administrador ou ter o cargo <@&{ALLOWED_ROLE_ID}> para usar este comando.",
@@ -773,11 +833,11 @@ async def mostrar_fila(interaction: discord.Interaction, modo: app_commands.Choi
     view = QueueButton(mode, valor, taxa, message.id)
 
     await message.edit(embed=embed, view=view)
-    
+
     # Salva a informação da fila para o sistema de limpeza automática
     queue_id = f"{mode}_{message.id}"
     queue_messages[queue_id] = (interaction.channel.id, message.id, mode, valor)
-    
+
     # Para 2v2, também salva as filas dos times
     if "2v2" in mode:
         queue_messages[f"{queue_id}_team1"] = (interaction.channel.id, message.id, mode, valor)
@@ -995,11 +1055,6 @@ async def confirmar_pagamento(interaction: discord.Interaction):
         )
         await interaction.response.send_message(embed=embed)
 
-        try:
-            await mediator.send(f"{player1.name} confirmou o pagamento na aposta {interaction.channel.mention}")
-        except:
-            pass
-
     elif user_id == bet.player2_id:
         if bet.player2_confirmed:
             await interaction.response.send_message(
@@ -1020,11 +1075,6 @@ async def confirmar_pagamento(interaction: discord.Interaction):
             color=EMBED_COLOR
         )
         await interaction.response.send_message(embed=embed)
-
-        try:
-            await mediator.send(f"{player2.name} confirmou o pagamento na aposta {interaction.channel.mention}")
-        except:
-            pass
     else:
         await interaction.response.send_message(
             "Você não é um dos jogadores desta aposta.",
@@ -1220,10 +1270,10 @@ async def minhas_apostas(interaction: discord.Interaction):
 @bot.tree.command(name="sair-todas-filas", description="Sair de todas as filas em que você está")
 async def sair_todas_filas(interaction: discord.Interaction):
     user_id = interaction.user.id
-    
+
     # Remove o usuário de todas as filas
     db.remove_from_all_queues(user_id)
-    
+
     embed = discord.Embed(
         title="✅ Removido de todas as filas",
         description="Você foi removido de todas as filas. Agora você pode entrar novamente.",
@@ -1232,7 +1282,7 @@ async def sair_todas_filas(interaction: discord.Interaction):
     if interaction.guild.icon:
         embed.set_thumbnail(url=interaction.guild.icon.url)
     embed.set_footer(text=CREATOR_FOOTER)
-    
+
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
@@ -1365,14 +1415,14 @@ async def start_web_server():
     app.router.add_get('/', health_check)
     app.router.add_get('/health', health_check)
     app.router.add_get('/ping', ping)
-    
+
     runner = web.AppRunner(app)
     await runner.setup()
-    
+
     port = int(os.getenv('PORT', 8080))
     site = web.TCPSite(runner, '0.0.0.0', port)
     await site.start()
-    
+
     print(f"🌐 Servidor HTTP rodando em 0.0.0.0:{port}")
     print(f"   Endpoints: /, /health, /ping")
     return site
@@ -1382,17 +1432,17 @@ async def run_bot_with_webserver():
     token = os.getenv("DISCORD_TOKEN") or os.getenv("TOKEN") or ""
     if token == "":
         raise Exception("Por favor, adicione seu token do Discord nas variáveis de ambiente (DISCORD_TOKEN).")
-    
+
     print("🚀 Iniciando bot com servidor HTTP...")
-    
+
     # Iniciar servidor web ANTES do bot
     web_server = await start_web_server()
-    
+
     # Aguardar um pouco para o servidor estar pronto
     await asyncio.sleep(1)
-    
+
     print("🤖 Conectando bot ao Discord...")
-    
+
     # Iniciar bot Discord
     try:
         await bot.start(token, reconnect=True)
@@ -1408,7 +1458,7 @@ try:
         print("Iniciando bot no Railway com servidor HTTP...")
     else:
         print("Iniciando bot no Replit/Local...")
-    
+
     # Rodar bot com servidor web em ambientes de produção
     if IS_FLYIO or IS_RAILWAY:
         asyncio.run(run_bot_with_webserver())
@@ -1418,7 +1468,7 @@ try:
         if token == "":
             raise Exception("Por favor, adicione seu token do Discord nas variáveis de ambiente (DISCORD_TOKEN).")
         bot.run(token)
-        
+
 except discord.HTTPException as e:
     if e.status == 429:
         print("O Discord bloqueou a conexão por excesso de requisições")
