@@ -20,29 +20,45 @@ elif IS_RAILWAY:
 else:
     print("💻 Detectado ambiente Replit/Local")
 
-# Configuração otimizada de intents - apenas o necessário
+# Configuração ULTRA otimizada de intents - apenas o mínimo necessário
 intents = discord.Intents(
     guilds=True,           # Necessário para detectar servidores
     guild_messages=True,   # Necessário para mensagens
     members=True,          # Necessário para menções
     message_content=True   # Necessário para comandos
 )
-# Desabilitando eventos desnecessários para economizar RAM
+# Desabilitando TODOS eventos desnecessários para economizar RAM
 intents.presences = False
 intents.typing = False
 intents.voice_states = False
 intents.integrations = False
 intents.webhooks = False
 intents.invites = False
-intents.emojis = False
+intents.emojis_and_stickers = False
 intents.bans = False
+intents.dm_messages = False
+intents.dm_reactions = False
+intents.dm_typing = False
+intents.guild_reactions = False
+intents.guild_typing = False
+intents.moderation = False
 
-bot = commands.Bot(command_prefix="!", intents=intents)
+# Bot com configurações de economia máxima
+bot = commands.Bot(
+    command_prefix="!",
+    intents=intents,
+    chunk_guilds_at_startup=False,  # Não carregar todos membros (economiza RAM)
+    member_cache_flags=discord.MemberCacheFlags.none(),  # Sem cache de membros
+    max_messages=50  # Cache mínimo de mensagens (padrão é 1000)
+)
 db = Database()
 
 MODES = ["1v1-misto", "1v1-mob", "2v2-misto"]
 ACTIVE_BETS_CATEGORY = "💰 Apostas Ativas"
 EMBED_COLOR = 0x5865F2
+CREATOR_FOOTER = "Bot feito por SKplay. Todos os direitos reservados | Criador: <@1339336477661724674>"
+ALLOWED_ROLE_ID = 1393707608254320671  # Cargo que pode criar filas sem ser admin
+ALLOWED_USER_ID = 1309895241851207681  # Usuário com permissões especiais
 
 # Dicionário para mapear queue_id -> (channel_id, message_id, mode, bet_value)
 queue_messages = {}
@@ -109,6 +125,7 @@ class QueueButton(discord.ui.View):
                 embed.add_field(name="Time 2", value=team2_text, inline=True)
                 if interaction.guild.icon:
                     embed.set_thumbnail(url=interaction.guild.icon.url)
+                embed.set_footer(text=CREATOR_FOOTER)
             else:
                 queue = db.get_queue(self.queue_id)
 
@@ -132,6 +149,7 @@ class QueueButton(discord.ui.View):
                 embed.add_field(name="Fila", value=players_text if players_text != "Nenhum jogador na fila" else "Vazio", inline=True)
                 if interaction.guild.icon:
                     embed.set_thumbnail(url=interaction.guild.icon.url)
+                embed.set_footer(text=CREATOR_FOOTER)
 
             await message.edit(embed=embed)
         except:
@@ -172,6 +190,7 @@ class QueueButton(discord.ui.View):
         )
         if interaction.guild.icon:
             embed.set_thumbnail(url=interaction.guild.icon.url)
+        embed.set_footer(text=CREATOR_FOOTER)
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
@@ -209,6 +228,7 @@ class QueueButton(discord.ui.View):
                 )
                 if interaction.guild.icon:
                     embed.set_thumbnail(url=interaction.guild.icon.url)
+                embed.set_footer(text=CREATOR_FOOTER)
                 await interaction.response.send_message(embed=embed, ephemeral=True)
                 await self.update_queue_message(interaction)
                 return
@@ -220,6 +240,7 @@ class QueueButton(discord.ui.View):
                 )
                 if interaction.guild.icon:
                     embed.set_thumbnail(url=interaction.guild.icon.url)
+                embed.set_footer(text=CREATOR_FOOTER)
                 await interaction.response.send_message(embed=embed, ephemeral=True)
                 await self.update_queue_message(interaction)
                 return
@@ -247,6 +268,7 @@ class QueueButton(discord.ui.View):
             )
             if interaction.guild.icon:
                 embed.set_thumbnail(url=interaction.guild.icon.url)
+            embed.set_footer(text=CREATOR_FOOTER)
 
             await interaction.response.send_message(embed=embed, ephemeral=True)
 
@@ -308,6 +330,7 @@ class QueueButton(discord.ui.View):
         )
         if interaction.guild.icon:
             embed.set_thumbnail(url=interaction.guild.icon.url)
+        embed.set_footer(text=CREATOR_FOOTER)
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
         await self.update_queue_message(interaction)
@@ -372,6 +395,7 @@ class QueueButton(discord.ui.View):
         )
         if interaction.guild.icon:
             embed.set_thumbnail(url=interaction.guild.icon.url)
+        embed.set_footer(text=CREATOR_FOOTER)
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
         await self.update_queue_message(interaction)
@@ -440,6 +464,7 @@ class ConfirmPaymentButton(discord.ui.View):
                 description=player1.mention,
                 color=EMBED_COLOR
             )
+            embed.set_footer(text=CREATOR_FOOTER)
             await interaction.response.send_message(embed=embed)
 
             try:
@@ -466,6 +491,7 @@ class ConfirmPaymentButton(discord.ui.View):
                 description=player2.mention,
                 color=EMBED_COLOR
             )
+            embed.set_footer(text=CREATOR_FOOTER)
             await interaction.response.send_message(embed=embed)
 
             try:
@@ -488,6 +514,7 @@ class ConfirmPaymentButton(discord.ui.View):
                 description="Partida liberada",
                 color=EMBED_COLOR
             )
+            embed.set_footer(text=CREATOR_FOOTER)
 
             await interaction.channel.send(embed=embed)
 
@@ -536,6 +563,7 @@ class PixModal(discord.ui.Modal, title='Inserir Chave PIX'):
         embed.add_field(name="Instrução", value="Envie o pagamento e clique no botão abaixo para confirmar", inline=False)
         if interaction.guild.icon:
             embed.set_thumbnail(url=interaction.guild.icon.url)
+        embed.set_footer(text=CREATOR_FOOTER)
 
         confirm_view = ConfirmPaymentButton(self.bet_id)
         await interaction.response.send_message(embed=embed, view=confirm_view)
@@ -574,8 +602,12 @@ class AcceptMediationButton(discord.ui.View):
             await interaction.response.send_message("Esta aposta já tem um mediador.", ephemeral=True)
             return
 
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("Apenas administradores podem aceitar mediação.", ephemeral=True)
+        is_admin = interaction.user.guild_permissions.administrator
+        has_allowed_role = discord.utils.get(interaction.user.roles, id=ALLOWED_ROLE_ID) is not None
+        is_allowed_user = interaction.user.id == ALLOWED_USER_ID
+        
+        if not is_admin and not has_allowed_role and not is_allowed_user:
+            await interaction.response.send_message("Apenas administradores, membros autorizados ou usuários especiais podem aceitar mediação.", ephemeral=True)
             return
 
         await interaction.response.send_modal(PixModal(self.bet_id))
@@ -584,12 +616,12 @@ class AcceptMediationButton(discord.ui.View):
 async def cleanup_expired_queues():
     """Tarefa em background que remove jogadores que ficaram muito tempo na fila"""
     await bot.wait_until_ready()
-    print("🧹 Iniciando sistema de limpeza automática de filas (2 minutos)")
+    print("🧹 Iniciando sistema de limpeza automática de filas (5 minutos)")
     
     while not bot.is_closed():
         try:
-            # Busca jogadores expirados (mais de 2 minutos na fila)
-            expired_players = db.get_expired_queue_players(timeout_minutes=2)
+            # Busca jogadores expirados (mais de 5 minutos na fila)
+            expired_players = db.get_expired_queue_players(timeout_minutes=5)
             
             if expired_players:
                 print(f"🧹 Encontrados jogadores expirados em {len(expired_players)} filas")
@@ -671,12 +703,12 @@ async def cleanup_expired_queues():
                         except Exception as e:
                             print(f"Erro ao atualizar mensagem da fila {queue_id}: {e}")
             
-            # Aguarda 30 segundos antes de verificar novamente
-            await asyncio.sleep(30)
+            # Aguarda 60 segundos antes de verificar novamente (economiza processamento)
+            await asyncio.sleep(60)
             
         except Exception as e:
             print(f"Erro na limpeza de filas: {e}")
-            await asyncio.sleep(30)
+            await asyncio.sleep(60)
 
 
 @bot.event
@@ -709,9 +741,14 @@ async def on_ready():
     app_commands.Choice(name="2v2 Misto", value="2v2-misto"),
 ])
 async def mostrar_fila(interaction: discord.Interaction, modo: app_commands.Choice[str], valor: float, taxa: float):
-    if not interaction.user.guild_permissions.administrator:
+    # Verifica se é admin, tem o cargo permitido ou é o usuário especial
+    is_admin = interaction.user.guild_permissions.administrator
+    has_allowed_role = discord.utils.get(interaction.user.roles, id=ALLOWED_ROLE_ID) is not None
+    is_allowed_user = interaction.user.id == ALLOWED_USER_ID
+    
+    if not is_admin and not has_allowed_role and not is_allowed_user:
         await interaction.response.send_message(
-            "Apenas moderadores podem usar este comando.",
+            f"❌ Você precisa ser administrador ou ter o cargo <@&{ALLOWED_ROLE_ID}> para usar este comando.",
             ephemeral=True
         )
         return
@@ -727,6 +764,7 @@ async def mostrar_fila(interaction: discord.Interaction, modo: app_commands.Choi
     embed.add_field(name="Fila", value="Vazio", inline=True)
     if interaction.guild.icon:
         embed.set_thumbnail(url=interaction.guild.icon.url)
+    embed.set_footer(text=CREATOR_FOOTER)
 
     await interaction.response.send_message(embed=embed)
 
@@ -842,6 +880,7 @@ async def create_2v2_bet_channel(guild: discord.Guild, mode: str, team1: list, t
     embed.add_field(name="Time 2", value=team2_mentions, inline=True)
     if guild.icon:
         embed.set_thumbnail(url=guild.icon.url)
+    embed.set_footer(text=CREATOR_FOOTER)
 
     view = AcceptMediationButton(bet_id)
 
@@ -908,6 +947,7 @@ async def create_bet_channel(guild: discord.Guild, mode: str, player1_id: int, p
     embed.add_field(name="Jogadores", value=f"{player1.mention} vs {player2.mention}", inline=False)
     if guild.icon:
         embed.set_thumbnail(url=guild.icon.url)
+    embed.set_footer(text=CREATOR_FOOTER)
 
     view = AcceptMediationButton(bet_id)
 
@@ -1045,6 +1085,7 @@ async def finalizar_aposta(interaction: discord.Interaction, vencedor: discord.M
     )
     embed.add_field(name="Modo", value=bet.mode.replace("-", " ").title(), inline=True)
     embed.add_field(name="Perdedor", value=loser.mention, inline=True)
+    embed.set_footer(text=CREATOR_FOOTER)
 
     await interaction.response.send_message(embed=embed)
 
@@ -1085,6 +1126,7 @@ async def cancelar_aposta(interaction: discord.Interaction):
         description=f"{player1.mention} e {player2.mention}",
         color=EMBED_COLOR
     )
+    embed.set_footer(text=CREATOR_FOOTER)
 
     await interaction.response.send_message(embed=embed)
 
@@ -1130,6 +1172,7 @@ async def historico(interaction: discord.Interaction):
         )
     if interaction.guild.icon:
         embed.set_thumbnail(url=interaction.guild.icon.url)
+    embed.set_footer(text=CREATOR_FOOTER)
 
     await interaction.response.send_message(embed=embed)
 
@@ -1169,6 +1212,7 @@ async def minhas_apostas(interaction: discord.Interaction):
         )
     if interaction.guild.icon:
         embed.set_thumbnail(url=interaction.guild.icon.url)
+    embed.set_footer(text=CREATOR_FOOTER)
 
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
@@ -1187,6 +1231,7 @@ async def sair_todas_filas(interaction: discord.Interaction):
     )
     if interaction.guild.icon:
         embed.set_thumbnail(url=interaction.guild.icon.url)
+    embed.set_footer(text=CREATOR_FOOTER)
     
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
@@ -1244,9 +1289,9 @@ async def desbugar_filas(interaction: discord.Interaction):
     embed.add_field(name="Apostas Canceladas", value=str(cancelled_bets), inline=True)
     embed.add_field(name="Canais Deletados", value=str(deleted_channels), inline=True)
     embed.add_field(name="Filas Limpas", value="Todas", inline=True)
-    embed.set_footer(text=f"Executado por {interaction.user.name}")
     if interaction.guild.icon:
         embed.set_thumbnail(url=interaction.guild.icon.url)
+    embed.set_footer(text=f"{CREATOR_FOOTER} | Executado por {interaction.user.name}")
 
     await interaction.followup.send(embed=embed, ephemeral=True)
 
@@ -1295,6 +1340,7 @@ async def ajuda(interaction: discord.Interaction):
     )
     if interaction.guild.icon:
         embed.set_thumbnail(url=interaction.guild.icon.url)
+    embed.set_footer(text=CREATOR_FOOTER)
 
     await interaction.response.send_message(embed=embed)
 
