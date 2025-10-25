@@ -157,7 +157,7 @@ class QueueButton(discord.ui.View):
         except:
             pass
 
-    @discord.ui.button(label='Entrar na Fila', style=discord.ButtonStyle.blurple, row=0)
+    @discord.ui.button(label='Entrar na Fila', style=discord.ButtonStyle.blurple, row=0, custom_id='persistent:join_queue')
     async def join_queue_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         # Este botão não aparece no modo 2v2
         if self.is_2v2:
@@ -240,7 +240,7 @@ class QueueButton(discord.ui.View):
 
             await create_bet_channel(interaction.guild, self.mode, player1_id, player2_id, self.bet_value, self.mediator_fee)
 
-    @discord.ui.button(label='Entrar no Time 1', style=discord.ButtonStyle.blurple, row=0)
+    @discord.ui.button(label='Entrar no Time 1', style=discord.ButtonStyle.blurple, row=0, custom_id='persistent:join_team1')
     async def join_team1_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not self.is_2v2:
             await interaction.response.send_message(
@@ -305,7 +305,7 @@ class QueueButton(discord.ui.View):
         if len(team1_queue) == 2 and len(team2_queue) == 2:
             await self.create_2v2_match(interaction.guild, team1_queue, team2_queue)
 
-    @discord.ui.button(label='Entrar no Time 2', style=discord.ButtonStyle.blurple, row=0)
+    @discord.ui.button(label='Entrar no Time 2', style=discord.ButtonStyle.blurple, row=0, custom_id='persistent:join_team2')
     async def join_team2_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not self.is_2v2:
             await interaction.response.send_message(
@@ -370,7 +370,7 @@ class QueueButton(discord.ui.View):
         if len(team1_queue) == 2 and len(team2_queue) == 2:
             await self.create_2v2_match(interaction.guild, team1_queue, team2_queue)
 
-    @discord.ui.button(label='Sair da Fila', style=discord.ButtonStyle.gray, row=0)
+    @discord.ui.button(label='Sair da Fila', style=discord.ButtonStyle.gray, row=0, custom_id='persistent:leave_queue')
     async def leave_queue_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         user_id = interaction.user.id
 
@@ -456,7 +456,7 @@ class ConfirmPaymentButton(discord.ui.View):
         super().__init__(timeout=None)
         self.bet_id = bet_id
 
-    @discord.ui.button(label='Confirmar Pagamento', style=discord.ButtonStyle.green, emoji='💰')
+    @discord.ui.button(label='Confirmar Pagamento', style=discord.ButtonStyle.green, emoji='💰', custom_id='persistent:confirm_payment')
     async def confirm_payment_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         bet = db.get_active_bet(self.bet_id)
 
@@ -611,7 +611,7 @@ class AcceptMediationButton(discord.ui.View):
         super().__init__(timeout=None)
         self.bet_id = bet_id
 
-    @discord.ui.button(label='Aceitar Mediação', style=discord.ButtonStyle.green)
+    @discord.ui.button(label='Aceitar Mediação', style=discord.ButtonStyle.green, custom_id='persistent:accept_mediation')
     async def accept_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         bet = db.get_active_bet(self.bet_id)
 
@@ -781,6 +781,18 @@ async def on_ready():
         print(f'{len(synced)} comandos sincronizados')
     except Exception as e:
         print(f'Erro ao sincronizar comandos: {e}')
+
+    # Registrar views persistentes (para botões não expirarem)
+    print('📋 Registrando views persistentes...')
+    
+    # Registrar QueueButton como view persistente (custom_id dinâmico)
+    # Isso garante que os botões funcionem mesmo após reiniciar o bot
+    bot.add_view(QueueButton(mode="1v1-misto", bet_value=0, mediator_fee=0))
+    bot.add_view(ConfirmPaymentButton(bet_id=""))
+    bot.add_view(AcceptMediationButton(bet_id=""))
+    bot.add_view(DeclareWinnerButton(bet_id=""))
+    
+    print('✅ Views persistentes registradas')
 
     # Inicia a tarefa de limpeza automática de filas
     bot.loop.create_task(cleanup_expired_queues())
