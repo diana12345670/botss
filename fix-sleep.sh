@@ -58,20 +58,25 @@ flyctl scale count 1 -a botss -y
 sleep 3
 
 echo ""
-echo "6. Configurando a máquina para NUNCA dormir..."
-flyctl machine list -a botss --json 2>/dev/null | grep -o '"id":"[^"]*"' | cut -d'"' -f4 | head -n1 | while read machine_id; do
+echo "6. Configurando TODAS as máquinas para NUNCA dormir..."
+flyctl machine list -a botss --json 2>/dev/null | grep -o '"id":"[^"]*"' | cut -d'"' -f4 | while read machine_id; do
     if [ ! -z "$machine_id" ]; then
         echo "   Configurando máquina: $machine_id"
         flyctl machine update $machine_id \
             --auto-stop=false \
             --auto-start=false \
             --yes \
-            -a botss 2>/dev/null || true
+            -a botss
+        sleep 2
     fi
 done
 
 echo ""
-echo "7. Verificando configuração final..."
+echo "7. Verificando configuração anti-sleep..."
+flyctl machine list -a botss
+
+echo ""
+echo "8. Verificando configuração final..."
 echo ""
 flyctl status -a botss
 echo ""
