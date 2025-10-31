@@ -110,8 +110,8 @@ class QueueButton(discord.ui.View):
             embed.set_footer(text=CREATOR_FOOTER)
 
             await message.edit(embed=embed)
-        except:
-            pass
+        except Exception as e:
+            log(f"Erro ao atualizar mensagem da fila: {e}")
 
     @discord.ui.button(label='Entrar na Fila', style=discord.ButtonStyle.blurple, row=0, custom_id='persistent:join_queue')
     async def join_queue_button(self, interaction: discord.Interaction, button: discord.ui.Button):
