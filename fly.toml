@@ -12,7 +12,7 @@ kill_timeout = "5s"
 [experimental]
   auto_rollback = false
 
-# Configuração de máquina fixa - NUNCA DORMIR
+# Configuração de serviço HTTP com health checks
 [http_service]
   internal_port = 8080
   force_https = false
@@ -26,7 +26,7 @@ kill_timeout = "5s"
     hard_limit = 100
     soft_limit = 80
 
-# Health checks otimizados
+# Health checks configurados
 [[http_service.checks]]
   interval = "30s"
   timeout = "5s"
@@ -38,7 +38,7 @@ kill_timeout = "5s"
   [http_service.checks.headers]
     User-Agent = "Fly-Health-Check"
 
-# Configuração da VM
+# Configuração da VM otimizada
 [[vm]]
   memory = "256mb"
   cpu_kind = "shared"
