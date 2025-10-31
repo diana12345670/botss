@@ -54,7 +54,7 @@ bot = commands.Bot(
     intents=intents,
     chunk_guilds_at_startup=False,  # Não carregar todos membros (economiza RAM)
     member_cache_flags=discord.MemberCacheFlags.none(),  # Sem cache de membros
-    max_messages=50  # Cache mínimo de mensagens (padrão é 1000)
+    max_messages=10  # Cache ULTRA mínimo de mensagens (padrão é 1000)
 )
 db = Database()
 
@@ -80,30 +80,37 @@ class QueueButton(discord.ui.View):
 
     async def update_queue_message(self, interaction: discord.Interaction):
         """Atualiza a mensagem da fila com os jogadores atuais"""
-        if not self.message_id:
+        # Busca metadados da fila do banco de dados
+        metadata = db.get_queue_metadata(interaction.message.id)
+        if metadata:
+            mode = metadata['mode']
+            bet_value = metadata['bet_value']
+            queue_id = metadata['queue_id']
+            message_id = metadata['message_id']
+        else:
+            # Fallback para valores da instância
+            mode = self.mode
+            bet_value = self.bet_value
+            queue_id = self.queue_id
+            message_id = self.message_id
+            
+        if not message_id:
             return
 
         try:
-            message = await interaction.channel.fetch_message(self.message_id)
-            queue = db.get_queue(self.queue_id)
+            message = await interaction.channel.fetch_message(message_id)
+            queue = db.get_queue(queue_id)
 
-            # Busca os nomes dos jogadores na fila
-            player_names = []
-            for user_id in queue:
-                try:
-                    member = await interaction.guild.fetch_member(user_id)
-                    player_names.append(member.mention)
-                except:
-                    player_names.append(f"<@{user_id}>")
-
+            # Usa menções diretas (sem fetch - mais rápido e econômico)
+            player_names = [f"<@{user_id}>" for user_id in queue]
             players_text = "\n".join(player_names) if player_names else "Nenhum jogador na fila"
 
             embed = discord.Embed(
-                title=self.mode.replace('-', ' ').title(),
+                title=mode.replace('-', ' ').title(),
                 color=EMBED_COLOR
             )
 
-            embed.add_field(name="Valor", value=f"R$ {self.bet_value:.2f}".replace('.', ','), inline=True)
+            embed.add_field(name="Valor", value=f"R$ {bet_value:.2f}".replace('.', ','), inline=True)
             embed.add_field(name="Fila", value=players_text if players_text != "Nenhum jogador na fila" else "Vazio", inline=True)
             if interaction.guild.icon:
                 embed.set_thumbnail(url=interaction.guild.icon.url)
@@ -117,6 +124,21 @@ class QueueButton(discord.ui.View):
     async def join_queue_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         user_id = interaction.user.id
 
+        # Busca metadados da fila do banco de dados
+        metadata = db.get_queue_metadata(interaction.message.id)
+        if metadata:
+            # Usa dados do DB (sempre corretos)
+            mode = metadata['mode']
+            bet_value = metadata['bet_value']
+            mediator_fee = metadata['mediator_fee']
+            queue_id = metadata['queue_id']
+        else:
+            # Fallback para valores da instância (caso antigo)
+            mode = self.mode
+            bet_value = self.bet_value
+            mediator_fee = self.mediator_fee
+            queue_id = self.queue_id
+
         if db.is_user_in_active_bet(user_id):
             await interaction.response.send_message(
                 "Você já está em uma aposta ativa. Finalize ela antes de entrar em outra fila.",
@@ -125,7 +147,7 @@ class QueueButton(discord.ui.View):
             return
 
         # Recarrega a fila para garantir que está atualizada
-        queue = db.get_queue(self.queue_id)
+        queue = db.get_queue(queue_id)
 
         if user_id in queue:
             await interaction.response.send_message(
@@ -135,13 +157,13 @@ class QueueButton(discord.ui.View):
             return
 
         # Adiciona à fila ANTES de responder
-        db.add_to_queue(self.queue_id, user_id)
-        queue = db.get_queue(self.queue_id)
+        db.add_to_queue(queue_id, user_id)
+        queue = db.get_queue(queue_id)
 
         # Responde ao usuário
         embed = discord.Embed(
             title="✅ Entrou na fila",
-            description=f"{self.mode.replace('-', ' ').title()} - {len(queue)}/2",
+            description=f"{mode.replace('-', ' ').title()} - {len(queue)}/2",
             color=EMBED_COLOR
         )
         if interaction.guild.icon:
@@ -152,24 +174,17 @@ class QueueButton(discord.ui.View):
 
         # Atualiza a mensagem principal IMEDIATAMENTE
         try:
-            message = await interaction.channel.fetch_message(self.message_id)
+            message = await interaction.channel.fetch_message(interaction.message.id)
 
-            # Busca os nomes dos jogadores na fila
-            player_names = []
-            for uid in queue:
-                try:
-                    member = await interaction.guild.fetch_member(uid)
-                    player_names.append(member.mention)
-                except:
-                    player_names.append(f"<@{uid}>")
-
+            # Usa menções diretas (sem fetch - mais rápido e econômico)
+            player_names = [f"<@{uid}>" for uid in queue]
             players_text = "\n".join(player_names) if player_names else "Vazio"
 
             embed_update = discord.Embed(
-                title=self.mode.replace('-', ' ').title(),
+                title=mode.replace('-', ' ').title(),
                 color=EMBED_COLOR
             )
-            embed_update.add_field(name="Valor", value=f"R$ {self.bet_value:.2f}".replace('.', ','), inline=True)
+            embed_update.add_field(name="Valor", value=f"R$ {bet_value:.2f}".replace('.', ','), inline=True)
             embed_update.add_field(name="Fila", value=players_text, inline=True)
             if interaction.guild.icon:
                 embed_update.set_thumbnail(url=interaction.guild.icon.url)
@@ -184,18 +199,26 @@ class QueueButton(discord.ui.View):
             player1_id = queue[0]
             player2_id = queue[1]
 
-            db.remove_from_queue(self.queue_id, player1_id)
-            db.remove_from_queue(self.queue_id, player2_id)
+            db.remove_from_queue(queue_id, player1_id)
+            db.remove_from_queue(queue_id, player2_id)
 
             # Atualiza a mensagem após remover os jogadores
             await self.update_queue_message(interaction)
 
-            await create_bet_channel(interaction.guild, self.mode, player1_id, player2_id, self.bet_value, self.mediator_fee)
+            await create_bet_channel(interaction.guild, mode, player1_id, player2_id, bet_value, mediator_fee)
 
     @discord.ui.button(label='Sair da Fila', style=discord.ButtonStyle.gray, row=0, custom_id='persistent:leave_queue')
     async def leave_queue_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         user_id = interaction.user.id
-        queue = db.get_queue(self.queue_id)
+        
+        # Busca metadados da fila do banco de dados
+        metadata = db.get_queue_metadata(interaction.message.id)
+        if metadata:
+            queue_id = metadata['queue_id']
+        else:
+            queue_id = self.queue_id
+        
+        queue = db.get_queue(queue_id)
 
         if user_id not in queue:
             await interaction.response.send_message(
@@ -204,7 +227,7 @@ class QueueButton(discord.ui.View):
             )
             return
 
-        db.remove_from_queue(self.queue_id, user_id)
+        db.remove_from_queue(queue_id, user_id)
 
         embed = discord.Embed(
             title="❌ Saiu da fila",
@@ -256,12 +279,10 @@ class ConfirmPaymentButton(discord.ui.View):
             bet.player1_confirmed = True
             db.update_active_bet(bet)
 
-            player1 = await interaction.guild.fetch_member(bet.player1_id)
-            mediator = await interaction.guild.fetch_member(bet.mediator_id)
-
+            # Usa menção direta (economiza chamadas API)
             embed = discord.Embed(
                 title="✅ Pagamento Confirmado",
-                description=player1.mention,
+                description=f"<@{bet.player1_id}>",
                 color=EMBED_COLOR
             )
             embed.set_footer(text=CREATOR_FOOTER)
@@ -278,12 +299,10 @@ class ConfirmPaymentButton(discord.ui.View):
             bet.player2_confirmed = True
             db.update_active_bet(bet)
 
-            player2 = await interaction.guild.fetch_member(bet.player2_id)
-            mediator = await interaction.guild.fetch_member(bet.mediator_id)
-
+            # Usa menção direta (economiza chamadas API)
             embed = discord.Embed(
                 title="✅ Pagamento Confirmado",
-                description=player2.mention,
+                description=f"<@{bet.player2_id}>",
                 color=EMBED_COLOR
             )
             embed.set_footer(text=CREATOR_FOOTER)
@@ -296,9 +315,7 @@ class ConfirmPaymentButton(discord.ui.View):
             return
 
         if bet.is_fully_confirmed():
-            player1 = await interaction.guild.fetch_member(bet.player1_id)
-            player2 = await interaction.guild.fetch_member(bet.player2_id)
-
+            # Usa menções diretas (economiza chamadas API)
             embed = discord.Embed(
                 title="✅ Pagamentos Confirmados",
                 description="Partida liberada",
@@ -328,9 +345,9 @@ class PixModal(discord.ui.Modal, title='Inserir Chave PIX'):
             return
 
         if bet.mediator_id != 0:
-            mediator = await interaction.guild.fetch_member(bet.mediator_id)
+            # Usa menção direta (economiza chamadas API)
             await interaction.response.send_message(
-                f"Esta aposta já tem um mediador: {mediator.mention}",
+                f"Esta aposta já tem um mediador: <@{bet.mediator_id}>",
                 ephemeral=True
             )
             return
@@ -339,15 +356,13 @@ class PixModal(discord.ui.Modal, title='Inserir Chave PIX'):
         bet.mediator_pix = str(self.pix_key.value)
         db.update_active_bet(bet)
 
-        player1 = await interaction.guild.fetch_member(bet.player1_id)
-        player2 = await interaction.guild.fetch_member(bet.player2_id)
-
+        # Usa menções diretas (economiza chamadas API)
         embed = discord.Embed(
             title="Mediador Aceito",
             color=EMBED_COLOR
         )
         embed.add_field(name="Modo", value=bet.mode.replace("-", " ").title(), inline=True)
-        embed.add_field(name="Jogadores", value=f"{player1.mention} vs {player2.mention}", inline=False)
+        embed.add_field(name="Jogadores", value=f"<@{bet.player1_id}> vs <@{bet.player2_id}>", inline=False)
         embed.add_field(name="Mediador", value=interaction.user.mention, inline=True)
         embed.add_field(name="PIX", value=f"`{bet.mediator_pix}`", inline=True)
         embed.add_field(name="Instrução", value="Envie o pagamento e clique no botão abaixo para confirmar", inline=False)
@@ -371,8 +386,8 @@ class PixModal(discord.ui.Modal, title='Inserir Chave PIX'):
             perms.send_messages = True
             await channel.set_permissions(interaction.user, overwrite=perms)
 
-            # Envia uma mensagem no canal mencionando os jogadores
-            await channel.send(f"{player1.mention} {player2.mention} Um mediador aceitou a aposta! ✅")
+            # Envia uma mensagem no canal mencionando os jogadores (menções diretas)
+            await channel.send(f"<@{bet.player1_id}> <@{bet.player2_id}> Um mediador aceitou a aposta! ✅")
 
 
 class AcceptMediationButton(discord.ui.View):
@@ -419,12 +434,10 @@ class AcceptMediationButton(discord.ui.View):
             await interaction.response.send_message("Apenas administradores, membros autorizados ou usuários especiais podem cancelar apostas.", ephemeral=True)
             return
 
-        player1 = await interaction.guild.fetch_member(bet.player1_id)
-        player2 = await interaction.guild.fetch_member(bet.player2_id)
-
+        # Usa menções diretas (economiza chamadas API)
         embed = discord.Embed(
             title="❌ Aposta Cancelada",
-            description=f"{player1.mention} e {player2.mention}",
+            description=f"<@{bet.player1_id}> e <@{bet.player2_id}>",
             color=EMBED_COLOR
         )
         embed.set_footer(text=CREATOR_FOOTER)
@@ -554,9 +567,10 @@ async def on_ready():
     # Registrar views persistentes (para botões não expirarem)
     log('📋 Registrando views persistentes...')
     
-    # Registrar QueueButton como view persistente (custom_id dinâmico)
-    # Isso garante que os botões funcionem mesmo após reiniciar o bot
-    bot.add_view(QueueButton(mode="1v1-misto", bet_value=0, mediator_fee=0))
+    # Registrar QueueButton como view persistente
+    # Os valores aqui não importam pois a view busca dados reais do banco de dados
+    # usando interaction.message.id quando o botão é clicado
+    bot.add_view(QueueButton(mode="", bet_value=0, mediator_fee=0))
     bot.add_view(ConfirmPaymentButton(bet_id=""))
     # AcceptMediationButton e DeclareWinnerButton não têm timeout=None nos botões cancel
     # então não podem ser registradas como persistentes
@@ -615,6 +629,9 @@ async def mostrar_fila(interaction: discord.Interaction, modo: app_commands.Choi
     view = QueueButton(mode, valor, taxa, message.id)
 
     await message.edit(embed=embed, view=view)
+
+    # Salva os metadados da fila no banco de dados (para views persistentes)
+    db.save_queue_metadata(message.id, mode, valor, taxa, interaction.channel.id)
 
     # Salva a informação da fila para o sistema de limpeza automática
     queue_id = f"{mode}_{message.id}"
@@ -801,9 +818,8 @@ async def finalizar_aposta(interaction: discord.Interaction, vencedor: discord.M
     bet.winner_id = vencedor.id
     bet.finished_at = datetime.now().isoformat()
 
-    player1 = await interaction.guild.fetch_member(bet.player1_id)
-    player2 = await interaction.guild.fetch_member(bet.player2_id)
-    loser = player1 if vencedor.id == bet.player2_id else player2
+    # Usa menções diretas (economiza chamadas API)
+    loser_id = bet.player1_id if vencedor.id == bet.player2_id else bet.player2_id
 
     embed = discord.Embed(
         title="🏆 Vencedor",
@@ -811,7 +827,7 @@ async def finalizar_aposta(interaction: discord.Interaction, vencedor: discord.M
         color=EMBED_COLOR
     )
     embed.add_field(name="Modo", value=bet.mode.replace("-", " ").title(), inline=True)
-    embed.add_field(name="Perdedor", value=loser.mention, inline=True)
+    embed.add_field(name="Perdedor", value=f"<@{loser_id}>", inline=True)
     embed.set_footer(text=CREATOR_FOOTER)
 
     await interaction.response.send_message(embed=embed)

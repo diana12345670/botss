@@ -27,7 +27,7 @@ class Database:
         """Garante que o arquivo de dados existe"""
         os.makedirs(os.path.dirname(self.data_file), exist_ok=True)
         if not os.path.exists(self.data_file):
-            self._save_data({'queues': {}, 'queue_timestamps': {}, 'active_bets': {}, 'bet_history': []})
+            self._save_data({'queues': {}, 'queue_timestamps': {}, 'queue_metadata': {}, 'active_bets': {}, 'bet_history': []})
 
     def _load_data(self) -> dict:
         """Carrega dados do arquivo"""
@@ -177,3 +177,38 @@ class Database:
         """Retorna todos os IDs de filas existentes"""
         data = self._load_data()
         return list(data['queues'].keys())
+
+    def save_queue_metadata(self, message_id: int, mode: str, bet_value: float, mediator_fee: float, channel_id: int):
+        """Salva metadados de uma fila (mode, bet_value, mediator_fee, channel_id)"""
+        data = self._load_data()
+        if 'queue_metadata' not in data:
+            data['queue_metadata'] = {}
+        
+        queue_id = f"{mode}_{message_id}"
+        data['queue_metadata'][str(message_id)] = {
+            'queue_id': queue_id,
+            'mode': mode,
+            'bet_value': bet_value,
+            'mediator_fee': mediator_fee,
+            'channel_id': channel_id,
+            'message_id': message_id
+        }
+        self._save_data(data)
+
+    def get_queue_metadata(self, message_id: int) -> Optional[dict]:
+        """Retorna metadados de uma fila pelo message_id"""
+        data = self._load_data()
+        if 'queue_metadata' not in data:
+            return None
+        return data['queue_metadata'].get(str(message_id))
+
+    def delete_queue_metadata(self, message_id: int):
+        """Remove metadados de uma fila"""
+        data = self._load_data()
+        if 'queue_metadata' not in data:
+            return
+        
+        message_id_str = str(message_id)
+        if message_id_str in data['queue_metadata']:
+            del data['queue_metadata'][message_id_str]
+            self._save_data(data)
