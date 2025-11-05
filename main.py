@@ -1507,14 +1507,10 @@ try:
             await start_web_server()
             await asyncio.sleep(1)
             
-            # No Fly.io, usar apenas 1 bot por deployment para estabilidade
-            token = os.getenv("DISCORD_TOKEN") or os.getenv("DISCORD_TOKEN_1") or ""
-            if not token:
-                raise Exception("Configure DISCORD_TOKEN nas variáveis de ambiente do Fly.io")
-            
-            log("🤖 Fly.io: Modo single bot (recomendado)")
-            log("💡 Para múltiplos bots, crie múltiplos apps no Fly.io")
-            await bot.start(token, reconnect=True)
+            # No Fly.io, suporta múltiplos bots (até 3)
+            log("🤖 Fly.io: Modo múltiplos bots")
+            log("💡 Configure DISCORD_TOKEN_1, DISCORD_TOKEN_2, DISCORD_TOKEN_3")
+            await run_multiple_bots()
 
         asyncio.run(run_flyio())
 
