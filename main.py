@@ -10,9 +10,18 @@ from models.bet import Bet
 from utils.database import Database
 from aiohttp import web
 
+# Forçar logs para stdout sem buffer (ESSENCIAL para Fly.io)
+import logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(message)s',
+    handlers=[logging.StreamHandler(sys.stdout)]
+)
+
 # Função para logging com flush automático (necessário para Fly.io)
 def log(message):
-    print(message, flush=True)
+    print(message, file=sys.stdout, flush=True)
+    sys.stdout.flush()  # Força flush duplo para Fly.io
 
 # Lock global para evitar race conditions na criação de apostas
 queue_locks = {}
@@ -95,7 +104,7 @@ class QueueButton(discord.ui.View):
             bet_value = self.bet_value
             queue_id = self.queue_id
             message_id = self.message_id
-            
+
         if not message_id:
             return
 
@@ -149,7 +158,7 @@ class QueueButton(discord.ui.View):
         # Adquire lock para esta fila para evitar race conditions
         if queue_id not in queue_locks:
             queue_locks[queue_id] = asyncio.Lock()
-        
+
         async with queue_locks[queue_id]:
             # Recarrega a fila dentro do lock
             queue = db.get_queue(queue_id)
@@ -208,7 +217,7 @@ class QueueButton(discord.ui.View):
                 try:
                     player1 = interaction.guild.get_member(player1_id)
                     player2 = interaction.guild.get_member(player2_id)
-                    
+
                     if not player1 or not player2:
                         # Se algum jogador saiu, remove-os da fila
                         if not player1:
@@ -217,7 +226,7 @@ class QueueButton(discord.ui.View):
                         if not player2:
                             db.remove_from_queue(queue_id, player2_id)
                             log(f"Jogador {player2_id} removido da fila (não está mais no servidor)")
-                        
+
                         await self.update_queue_message(interaction)
                         return
                 except Exception as e:
@@ -236,14 +245,14 @@ class QueueButton(discord.ui.View):
     @discord.ui.button(label='Sair da Fila', style=discord.ButtonStyle.gray, row=0, custom_id='persistent:leave_queue')
     async def leave_queue_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         user_id = interaction.user.id
-        
+
         # Busca metadados da fila do banco de dados
         metadata = db.get_queue_metadata(interaction.message.id)
         if metadata:
             queue_id = metadata['queue_id']
         else:
             queue_id = self.queue_id
-        
+
         queue = db.get_queue(queue_id)
 
         if user_id not in queue:
@@ -417,7 +426,7 @@ class PixModal(discord.ui.Modal, title='Inserir Chave PIX'):
                 log(f"Thread {bet.channel_id} não encontrado (já deletado)")
             except Exception as e:
                 log(f"Erro ao buscar thread: {e}")
-        
+
         if thread:
             # Adiciona o mediador ao tópico
             await thread.add_user(interaction.user)
@@ -515,12 +524,12 @@ async def cleanup_orphaned_data_task():
     """Tarefa em background que limpa dados órfãos a cada 10 minutos"""
     await bot.wait_until_ready()
     log("🧹 Iniciando limpeza de dados órfãos (a cada 10 minutos)")
-    
+
     while not bot.is_closed():
         try:
             # Aguarda 10 minutos
             await asyncio.sleep(600)
-            
+
             # Limpa dados órfãos
             cleaned = db.cleanup_orphaned_data()
             if cleaned:
@@ -625,7 +634,7 @@ async def on_ready():
         print(f'Bot conectado como {bot.user}')
         print(f'Nome: {bot.user.name}')
         print(f'ID: {bot.user.id}')
-        
+
         synced = await bot.tree.sync()
         print(f'{len(synced)} comandos sincronizados')
     except Exception as e:
@@ -634,7 +643,7 @@ async def on_ready():
 
     # Registrar views persistentes (para botões não expirarem)
     log('📋 Registrando views persistentes...')
-    
+
     # Registra apenas UMA VEZ cada view persistente
     # IMPORTANTE: Não criar novas instâncias, reutilizar as mesmas
     if not hasattr(bot, '_persistent_views_registered'):
@@ -673,7 +682,7 @@ async def on_ready():
 async def mostrar_fila(interaction: discord.Interaction, modo: app_commands.Choice[str], valor: float, taxa: float):
     # Busca o cargo de mediador configurado
     mediator_role_id = db.get_mediator_role(interaction.guild.id)
-    
+
     # Verifica se tem o cargo de mediador configurado
     has_mediator_role = mediator_role_id and discord.utils.get(interaction.user.roles, id=mediator_role_id) is not None
 
@@ -737,7 +746,7 @@ async def create_bet_channel(guild: discord.Guild, mode: str, player1_id: int, p
         # Usa get_member ao invés de fetch_member (mais rápido, sem API call)
         player1 = guild.get_member(player1_id)
         player2 = guild.get_member(player2_id)
-        
+
         # Se não encontrou no cache, só então faz fetch
         if not player1:
             player1 = await guild.fetch_member(player1_id)
@@ -746,7 +755,7 @@ async def create_bet_channel(guild: discord.Guild, mode: str, player1_id: int, p
 
         # Busca o canal de origem (onde foi usado /mostrar-fila)
         source_channel = guild.get_channel(source_channel_id) if source_channel_id else None
-        
+
         if not source_channel:
             log(f"Canal de origem não encontrado. Abortando criação.")
             db.add_to_queue(mode, player1_id)
@@ -755,7 +764,7 @@ async def create_bet_channel(guild: discord.Guild, mode: str, player1_id: int, p
 
         # Criar tópico ao invés de canal
         thread_name = f"Aposta: {player1.name} vs {player2.name}"
-        
+
         # Cria um tópico privado
         thread = await source_channel.create_thread(
             name=thread_name,
@@ -763,7 +772,7 @@ async def create_bet_channel(guild: discord.Guild, mode: str, player1_id: int, p
             auto_archive_duration=1440,  # 24 horas
             invitable=False
         )
-        
+
         # Adiciona os jogadores ao tópico
         await thread.add_user(player1)
         await thread.add_user(player2)
@@ -788,7 +797,7 @@ async def create_bet_channel(guild: discord.Guild, mode: str, player1_id: int, p
 
     # Busca o cargo de mediador configurado
     mediator_role_id = db.get_mediator_role(guild.id)
-    
+
     if mediator_role_id:
         mediator_role = guild.get_role(mediator_role_id)
         admin_mention = mediator_role.mention if mediator_role else "@Mediadores"
@@ -1134,7 +1143,7 @@ async def desbugar_filas(interaction: discord.Interaction):
             if not thread:
                 # Tenta buscar como canal
                 thread = interaction.guild.get_channel(bet.channel_id)
-            
+
             if thread:
                 if isinstance(thread, discord.Thread):
                     await thread.edit(archived=True, locked=True)
@@ -1180,10 +1189,10 @@ async def setup(interaction: discord.Interaction, cargo: discord.Role):
             ephemeral=True
         )
         return
-    
+
     # Salvar o cargo de mediador no banco de dados
     db.set_mediator_role(interaction.guild.id, cargo.id)
-    
+
     embed = discord.Embed(
         title="✅ Configuração Salva",
         description=f"Cargo de mediador definido como {cargo.mention}",
@@ -1201,7 +1210,7 @@ async def setup(interaction: discord.Interaction, cargo: discord.Role):
     if interaction.guild.icon:
         embed.set_thumbnail(url=interaction.guild.icon.url)
     embed.set_footer(text=CREATOR_FOOTER)
-    
+
     await interaction.response.send_message(embed=embed)
 
 
@@ -1328,7 +1337,7 @@ def create_bot_instance():
         member_cache_flags=discord.MemberCacheFlags.none(),
         max_messages=10
     )
-    
+
     # Criar função de limpeza específica para esta instância do bot
     async def cleanup_for_this_bot():
         """Tarefa em background que remove jogadores que ficaram muito tempo na fila"""
@@ -1354,7 +1363,7 @@ def create_bot_instance():
                                 if channel:
                                     message = await channel.fetch_message(message_id)
                                     queue = db.get_queue(queue_id)
-                                    
+
                                     player_names = [f"<@{uid}>" for uid in queue]
                                     players_text = "\n".join(player_names) if player_names else "Vazio"
 
@@ -1375,7 +1384,7 @@ def create_bot_instance():
             except Exception as e:
                 log(f"Erro na limpeza de filas [{new_bot.user.name}]: {e}")
                 await asyncio.sleep(60)
-    
+
     # Registrar evento on_ready
     @new_bot.event
     async def on_ready():
@@ -1396,11 +1405,11 @@ def create_bot_instance():
 
         # Inicia a tarefa de limpeza automática de filas para ESTE bot
         new_bot.loop.create_task(cleanup_for_this_bot())
-    
+
     # Copiar todos os comandos da árvore do bot original
     for command in bot.tree.get_commands():
         new_bot.tree.add_command(command)
-    
+
     return new_bot
 
 async def run_bot_single():
@@ -1408,7 +1417,7 @@ async def run_bot_single():
     token = os.getenv("DISCORD_TOKEN") or os.getenv("DISCORD_TOKEN_1") or ""
     if not token:
         raise Exception("Configure DISCORD_TOKEN nas variáveis de ambiente.")
-    
+
     log("🤖 Modo econômico: Iniciando 1 bot...")
     await bot.start(token, reconnect=True)
 
@@ -1418,56 +1427,63 @@ async def run_multiple_bots():
     token1 = os.getenv("DISCORD_TOKEN_1") or os.getenv("DISCORD_TOKEN") or ""
     token2 = os.getenv("DISCORD_TOKEN_2") or ""
     token3 = os.getenv("DISCORD_TOKEN_3") or ""
-    
+
     tokens = [t for t in [token1, token2, token3] if t]
-    
+
     if not tokens:
         raise Exception("Configure pelo menos DISCORD_TOKEN nas variáveis de ambiente.")
-    
+
     # Limita a 3 bots para economizar recursos
     if len(tokens) > 3:
         log("⚠️ AVISO: Mais de 3 tokens configurados. Limitando a 3 bots para economizar recursos.")
         tokens = tokens[:3]
-    
+
     # Se há apenas 1 token, usa modo econômico
     if len(tokens) == 1:
         log("💡 Apenas 1 token detectado - usando modo econômico (menos memória)")
         await run_bot_single()
         return
-    
+
     log(f"🤖 Modo múltiplos bots: Iniciando {len(tokens)} bots...")
     log("⚠️ AVISO: Múltiplos bots consomem mais memória. Use apenas se necessário.")
-    
+
     # Criar uma instância de bot para cada token
     tasks = []
-    
+
     for i, token in enumerate(tokens, 1):
         new_bot = create_bot_instance()
         log(f"🚀 Iniciando bot #{i}...")
         tasks.append(new_bot.start(token, reconnect=True))
-    
+
     # Rodar todos os bots simultaneamente
     await asyncio.gather(*tasks, return_exceptions=True)
 
 try:
     if IS_FLYIO:
-        log("Iniciando bots no Fly.io com servidor HTTP...")
+        log("Iniciando bot no Fly.io com servidor HTTP...")
+
+        async def run_flyio():
+            # Iniciar servidor web primeiro
+            await start_web_server()
+            await asyncio.sleep(1)
+            # No Fly.io, rodar múltiplos bots
+            await run_multiple_bots()
+
+        asyncio.run(run_flyio())
+
     elif IS_RAILWAY:
         log("Iniciando bots no Railway com servidor HTTP...")
-    else:
-        log("Iniciando bots no Replit/Local...")
 
-    # Rodar múltiplos bots com servidor web em ambientes de produção
-    if IS_FLYIO or IS_RAILWAY:
         async def run_all():
             # Iniciar servidor web primeiro
             await start_web_server()
             await asyncio.sleep(1)
             # Iniciar múltiplos bots
             await run_multiple_bots()
-        
+
         asyncio.run(run_all())
     else:
+        log("Iniciando bots no Replit/Local...")
         # No Replit/Local, rodar múltiplos bots
         asyncio.run(run_multiple_bots())
 

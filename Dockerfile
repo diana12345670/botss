@@ -24,5 +24,6 @@ RUN find . -type f -name "*.pyc" -delete && \
     find . -type d -name "__pycache__" -delete && \
     rm -rf .git .github *.md test-server.py fix-flyio.sh
 
-# Usar python otimizado (remove bytecode e asserts)
-CMD ["python", "-OO", "-u", "main.py"]
+# Usar python unbuffered (logs aparecem imediatamente no Fly.io)
+ENV PYTHONUNBUFFERED=1
+CMD ["python", "-u", "main.py"]
