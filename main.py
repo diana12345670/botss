@@ -907,14 +907,18 @@ async def create_bet_channel(guild: discord.Guild, mode: str, player1_id: int, p
     else:
         admin_mention = "@Mediadores (configure com /setup)"
 
+    # Formata valores corretamente (substitui ponto por vírgula)
+    valor_formatado = f"R$ {bet_value:.2f}".replace('.', ',')
+    taxa_formatada = f"R$ {mediator_fee:.2f}".replace('.', ',')
+    
     embed = discord.Embed(
         title="Aposta - Aguardando Mediador",
         description=admin_mention,
         color=EMBED_COLOR
     )
     embed.add_field(name="Modo", value=mode.replace("-", " ").title(), inline=True)
-    embed.add_field(name="Valor", value=f"R$ {bet_value:.2f}".replace('.', ','), inline=True)
-    embed.add_field(name="Taxa", value=f"R$ {mediator_fee:.2f}".replace('.', ','), inline=True)
+    embed.add_field(name="Valor da Aposta", value=valor_formatado, inline=True)
+    embed.add_field(name="Taxa do Mediador", value=taxa_formatada, inline=True)
     embed.add_field(name="Jogadores", value=f"{player1.mention} vs {player2.mention}", inline=False)
     if guild.icon:
         embed.set_thumbnail(url=guild.icon.url)
