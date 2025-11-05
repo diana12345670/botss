@@ -12,16 +12,30 @@ from aiohttp import web
 
 # Forçar logs para stdout sem buffer (ESSENCIAL para Fly.io)
 import logging
+
+# Configurar logging para capturar TUDO (incluindo discord.py)
 logging.basicConfig(
     level=logging.INFO,
-    format='%(message)s',
-    handlers=[logging.StreamHandler(sys.stdout)]
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout)
+    ],
+    force=True  # Força reconfiguração mesmo se já configurado
 )
+
+# Desabilitar buffering do Python completamente
+sys.stdout.reconfigure(line_buffering=True)
+sys.stderr.reconfigure(line_buffering=True)
+
+# Logger do bot
+logger = logging.getLogger('bot')
+logger.setLevel(logging.INFO)
 
 # Função para logging com flush automático (necessário para Fly.io)
 def log(message):
-    print(message, file=sys.stdout, flush=True)
-    sys.stdout.flush()  # Força flush duplo para Fly.io
+    logger.info(message)
+    sys.stdout.flush()
+    sys.stderr.flush()
 
 # Lock global para evitar race conditions na criação de apostas
 queue_locks = {}
@@ -189,65 +203,34 @@ class QueueButton(discord.ui.View):
             db.add_to_queue(queue_id, user_id)
             queue = db.get_queue(queue_id)
 
-        # Responde ao usuário
-        embed = discord.Embed(
-            title="✅ Entrou na fila",
-            description=f"{mode.replace('-', ' ').title()} - {len(queue)}/2",
-            color=EMBED_COLOR
-        )
-        if interaction.guild.icon:
-            embed.set_thumbnail(url=interaction.guild.icon.url)
-        embed.set_footer(text=CREATOR_FOOTER)
-
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
-        # Atualiza a mensagem principal IMEDIATAMENTE
-        try:
-            message = await interaction.channel.fetch_message(interaction.message.id)
-
-            # Usa menções diretas (sem fetch - mais rápido e econômico)
-            player_names = [f"<@{uid}>" for uid in queue]
-            players_text = "\n".join(player_names) if player_names else "Vazio"
-
-            embed_update = discord.Embed(
-                title=mode.replace('-', ' ').title(),
-                color=EMBED_COLOR
-            )
-            embed_update.add_field(name="Valor", value=f"R$ {bet_value:.2f}".replace('.', ','), inline=True)
-            embed_update.add_field(name="Fila", value=players_text, inline=True)
-            if interaction.guild.icon:
-                embed_update.set_thumbnail(url=interaction.guild.icon.url)
-            embed_update.set_footer(text=CREATOR_FOOTER)
-
-            await message.edit(embed=embed_update)
-        except Exception as e:
-            log(f"Erro ao atualizar mensagem da fila: {e}")
-
         # Verifica se tem 2 jogadores para criar aposta
         if len(queue) >= 2:
+                log(f"🎯 2 jogadores encontrados na fila {queue_id}! Iniciando criação de aposta...")
+                
+                # DEFER IMEDIATAMENTE para evitar timeout (3 segundos)
+                await interaction.response.defer(ephemeral=True)
+                log(f"⏳ Interação deferida (evita timeout)")
+                
                 player1_id = queue[0]
                 player2_id = queue[1]
 
-                # Valida se ambos jogadores ainda estão no servidor (economia de recursos)
+                # Envia mensagem de confirmação (sem validar se estão no servidor)
+                player1_mention = f"<@{player1_id}>"
+                player2_mention = f"<@{player2_id}>"
+                embed = discord.Embed(
+                    title="✅ Aposta encontrada!",
+                    description=f"Criando tópico para {player1_mention} vs {player2_mention}...",
+                    color=EMBED_COLOR
+                )
+                if interaction.guild.icon:
+                    embed.set_thumbnail(url=interaction.guild.icon.url)
+                embed.set_footer(text=CREATOR_FOOTER)
+                
                 try:
-                    player1 = interaction.guild.get_member(player1_id)
-                    player2 = interaction.guild.get_member(player2_id)
-
-                    if not player1 or not player2:
-                        # Se algum jogador saiu, remove-os da fila
-                        if not player1:
-                            db.remove_from_queue(queue_id, player1_id)
-                            log(f"Jogador {player1_id} removido da fila (não está mais no servidor)")
-                        if not player2:
-                            db.remove_from_queue(queue_id, player2_id)
-                            log(f"Jogador {player2_id} removido da fila (não está mais no servidor)")
-
-                        guild_icon = interaction.guild.icon.url if interaction.guild.icon else None
-                        await self.update_queue_message(interaction.channel, guild_icon, interaction.message.id)
-                        return
+                    await interaction.followup.send(embed=embed, ephemeral=True)
+                    log(f"✅ Mensagem de confirmação enviada")
                 except Exception as e:
-                    log(f"Erro ao validar jogadores: {e}")
-                    return
+                    log(f"⚠️ Erro ao enviar mensagem de confirmação: {e}")
 
                 # Remove os jogadores da fila
                 db.remove_from_queue(queue_id, player1_id)
@@ -263,7 +246,58 @@ class QueueButton(discord.ui.View):
                     log(f"⚠️ Erro ao atualizar mensagem da fila: {e}")
 
                 # Passa o ID do canal atual para criar o tópico nele
-                await create_bet_channel(interaction.guild, mode, player1_id, player2_id, bet_value, mediator_fee, interaction.channel_id)
+                log(f"🏗️ Iniciando criação do tópico...")
+                try:
+                    await create_bet_channel(interaction.guild, mode, player1_id, player2_id, bet_value, mediator_fee, interaction.channel_id)
+                    log(f"✅ Tópico criado com sucesso!")
+                except Exception as e:
+                    log(f"❌ ERRO ao criar tópico: {e}")
+                    logger.exception("Stacktrace completo:")
+                    
+                    # Se falhou, retorna os jogadores para a fila
+                    db.add_to_queue(queue_id, player1_id)
+                    db.add_to_queue(queue_id, player2_id)
+                    log(f"♻️ Jogadores retornados à fila após erro")
+                    
+                    # Atualiza a mensagem novamente
+                    try:
+                        guild_icon = interaction.guild.icon.url if interaction.guild.icon else None
+                        await self.update_queue_message(interaction.channel, guild_icon, interaction.message.id)
+                    except:
+                        pass
+        else:
+                # Apenas entrou na fila (menos de 2 jogadores)
+                embed = discord.Embed(
+                    title="✅ Entrou na fila",
+                    description=f"{mode.replace('-', ' ').title()} - {len(queue)}/2",
+                    color=EMBED_COLOR
+                )
+                if interaction.guild.icon:
+                    embed.set_thumbnail(url=interaction.guild.icon.url)
+                embed.set_footer(text=CREATOR_FOOTER)
+
+                await interaction.response.send_message(embed=embed, ephemeral=True)
+
+                # Atualiza a mensagem principal
+                try:
+                    message = await interaction.channel.fetch_message(interaction.message.id)
+
+                    player_names = [f"<@{uid}>" for uid in queue]
+                    players_text = "\n".join(player_names) if player_names else "Vazio"
+
+                    embed_update = discord.Embed(
+                        title=mode.replace('-', ' ').title(),
+                        color=EMBED_COLOR
+                    )
+                    embed_update.add_field(name="Valor", value=f"R$ {bet_value:.2f}".replace('.', ','), inline=True)
+                    embed_update.add_field(name="Fila", value=players_text, inline=True)
+                    if interaction.guild.icon:
+                        embed_update.set_thumbnail(url=interaction.guild.icon.url)
+                    embed_update.set_footer(text=CREATOR_FOOTER)
+
+                    await message.edit(embed=embed_update)
+                except Exception as e:
+                    log(f"Erro ao atualizar mensagem da fila: {e}")
 
     @discord.ui.button(label='Sair da Fila', style=discord.ButtonStyle.gray, row=0, custom_id='persistent:leave_queue')
     async def leave_queue_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -654,15 +688,23 @@ async def cleanup_expired_queues():
 
 @bot.event
 async def on_ready():
+    log("=" * 50)
+    log("✅ BOT CONECTADO AO DISCORD!")
+    log("=" * 50)
+    log(f'👤 Usuário: {bot.user}')
+    log(f'📛 Nome: {bot.user.name}')
+    log(f'🆔 ID: {bot.user.id}')
+    log(f'🌐 Servidores: {len(bot.guilds)}')
+    
     try:
-        print(f'Bot conectado como {bot.user}')
-        print(f'Nome: {bot.user.name}')
-        print(f'ID: {bot.user.id}')
-
+        log("🔄 Sincronizando comandos slash...")
         synced = await bot.tree.sync()
-        print(f'{len(synced)} comandos sincronizados')
+        log(f'✅ {len(synced)} comandos sincronizados com sucesso')
+        for cmd in synced:
+            log(f'  - /{cmd.name}')
     except Exception as e:
-        log(f'Erro ao sincronizar comandos: {e}')
+        log(f'⚠️ Erro ao sincronizar comandos: {e}')
+        logger.exception("Stacktrace:")
         # Não falha o startup por causa de erro de sync
 
     # Registrar views persistentes (para botões não expirarem)
@@ -758,60 +800,76 @@ async def mostrar_fila(interaction: discord.Interaction, modo: app_commands.Choi
 
 
 async def create_bet_channel(guild: discord.Guild, mode: str, player1_id: int, player2_id: int, bet_value: float, mediator_fee: float, source_channel_id: int = None):
+    log(f"🔧 create_bet_channel chamada: mode={mode}, player1={player1_id}, player2={player2_id}")
+    
     # Validação dupla com lock para evitar race condition
     if db.is_user_in_active_bet(player1_id) or db.is_user_in_active_bet(player2_id):
-        log(f"Um dos jogadores já está em uma aposta ativa. Abortando criação.")
+        log(f"❌ Um dos jogadores já está em uma aposta ativa. Abortando criação.")
         return
 
     db.remove_from_all_queues(player1_id)
     db.remove_from_all_queues(player2_id)
+    log(f"✅ Jogadores removidos de todas as filas")
 
     try:
         # Usa get_member ao invés de fetch_member (mais rápido, sem API call)
+        log(f"🔍 Buscando membros do servidor...")
         player1 = guild.get_member(player1_id)
         player2 = guild.get_member(player2_id)
 
         # Se não encontrou no cache, só então faz fetch
         if not player1:
+            log(f"🔄 Player1 não no cache, fazendo fetch...")
             player1 = await guild.fetch_member(player1_id)
         if not player2:
+            log(f"🔄 Player2 não no cache, fazendo fetch...")
             player2 = await guild.fetch_member(player2_id)
+        
+        log(f"✅ Jogadores encontrados: {player1.name} e {player2.name}")
 
         # Busca o canal de origem (onde foi usado /mostrar-fila)
+        log(f"🔍 Buscando canal de origem: {source_channel_id}")
         source_channel = guild.get_channel(source_channel_id) if source_channel_id else None
 
         if not source_channel:
-            log(f"Canal de origem não encontrado. Abortando criação.")
+            log(f"❌ Canal de origem {source_channel_id} não encontrado. Abortando criação.")
             db.add_to_queue(mode, player1_id)
             db.add_to_queue(mode, player2_id)
             return
+        
+        log(f"✅ Canal de origem encontrado: {source_channel.name}")
 
         # Criar tópico ao invés de canal
         thread_name = f"Aposta: {player1.name} vs {player2.name}"
+        log(f"🏗️ Tentando criar tópico: {thread_name}")
 
         try:
             # Cria um tópico privado
+            log(f"🔐 Tentando criar tópico PRIVADO...")
             thread = await source_channel.create_thread(
                 name=thread_name,
                 type=discord.ChannelType.private_thread,
                 auto_archive_duration=1440,  # 24 horas
                 invitable=False
             )
-            log(f"✅ Tópico criado: {thread_name} (ID: {thread.id})")
-        except discord.Forbidden:
-            log(f"❌ Sem permissão para criar tópico privado. Tentando tópico público...")
+            log(f"✅ Tópico PRIVADO criado: {thread_name} (ID: {thread.id})")
+        except discord.Forbidden as e:
+            log(f"❌ Sem permissão para criar tópico privado: {e}")
+            log(f"🔄 Tentando criar tópico PÚBLICO como fallback...")
             try:
                 # Fallback: tentar criar tópico público
                 thread = await source_channel.create_thread(
                     name=thread_name,
                     auto_archive_duration=1440
                 )
-                log(f"✅ Tópico público criado: {thread_name} (ID: {thread.id})")
+                log(f"✅ Tópico PÚBLICO criado: {thread_name} (ID: {thread.id})")
             except Exception as e:
                 log(f"❌ Erro ao criar tópico público: {e}")
+                logger.exception("Stacktrace:")
                 raise
         except Exception as e:
-            log(f"❌ Erro ao criar tópico: {e}")
+            log(f"❌ Erro inesperado ao criar tópico: {e}")
+            logger.exception("Stacktrace:")
             raise
 
         # Adiciona os jogadores ao tópico
@@ -1355,13 +1413,17 @@ async def run_bot_with_webserver():
     if token == "":
         raise Exception("Por favor, adicione seu token do Discord nas variáveis de ambiente (DISCORD_TOKEN).")
 
-    log("🚀 Iniciando bot com servidor HTTP...")
+    log("=" * 50)
+    log("🚀 INICIANDO BOT COM SERVIDOR HTTP")
+    log("=" * 50)
 
     # Iniciar servidor web ANTES do bot
+    log("📡 Iniciando servidor HTTP...")
     web_server = await start_web_server()
 
     # Aguardar um pouco para o servidor estar pronto
     await asyncio.sleep(1)
+    log("✅ Servidor HTTP iniciado com sucesso")
 
     log("🤖 Conectando bot ao Discord...")
 
@@ -1369,7 +1431,8 @@ async def run_bot_with_webserver():
     try:
         await bot.start(token, reconnect=True)
     except Exception as e:
-        log(f"❌ Erro ao iniciar bot: {e}")
+        log(f"❌ ERRO CRÍTICO ao iniciar bot: {e}")
+        logger.exception("Stacktrace completo:")
         raise
 
 
@@ -1484,6 +1547,10 @@ async def run_multiple_bots():
         tokens = tokens[:3]
 
     log(f"🤖 Modo múltiplos bots: Iniciando {len(tokens)} bot(s)...")
+    log(f"📋 Tokens encontrados:")
+    for i, token in enumerate(tokens, 1):
+        log(f"  {i}. DISCORD_TOKEN_{i}: {token[:20]}...{token[-10:]}")
+    
     if len(tokens) > 1:
         log("⚠️ AVISO: Múltiplos bots consomem mais memória. Use apenas se necessário.")
 
@@ -1500,16 +1567,24 @@ async def run_multiple_bots():
 
 try:
     if IS_FLYIO:
-        log("Iniciando bot no Fly.io com servidor HTTP...")
+        log("=" * 60)
+        log("✈️  INICIANDO NO FLY.IO")
+        log("=" * 60)
+        log(f"📍 App: {os.getenv('FLY_APP_NAME')}")
+        log(f"🌍 Region: {os.getenv('FLY_REGION', 'N/A')}")
+        log(f"🔧 Alloc ID: {os.getenv('FLY_ALLOC_ID', 'N/A')}")
 
         async def run_flyio():
             # Iniciar servidor web primeiro
+            log("📡 Iniciando servidor HTTP...")
             await start_web_server()
             await asyncio.sleep(1)
+            log("✅ Servidor HTTP rodando")
             
             # No Fly.io, suporta múltiplos bots (até 3)
             log("🤖 Fly.io: Modo múltiplos bots")
             log("💡 Configure DISCORD_TOKEN_1, DISCORD_TOKEN_2, DISCORD_TOKEN_3")
+            log("🚀 Iniciando bots Discord...")
             await run_multiple_bots()
 
         asyncio.run(run_flyio())
