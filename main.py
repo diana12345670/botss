@@ -246,7 +246,7 @@ class QueueButton(discord.ui.View):
                     log(f"⚠️ Erro ao atualizar mensagem da fila: {e}")
 
                 # Passa o ID do canal atual para criar o tópico nele
-                log(f"🏗️ Iniciando criação do tópico...")
+                log(f"🏗️ Iniciando criação do tópico com valores: bet_value={bet_value}, mediator_fee={mediator_fee}")
                 try:
                     await create_bet_channel(interaction.guild, mode, player1_id, player2_id, bet_value, mediator_fee, interaction.channel_id)
                     log(f"✅ Tópico criado com sucesso!")
@@ -907,9 +907,14 @@ async def create_bet_channel(guild: discord.Guild, mode: str, player1_id: int, p
     else:
         admin_mention = "@Mediadores (configure com /setup)"
 
+    # Log para debug - verificar valores recebidos
+    log(f"💰 Criando embed com valores: bet_value={bet_value}, mediator_fee={mediator_fee}")
+    
     # Formata valores corretamente (substitui ponto por vírgula)
-    valor_formatado = f"R$ {bet_value:.2f}".replace('.', ',')
-    taxa_formatada = f"R$ {mediator_fee:.2f}".replace('.', ',')
+    valor_formatado = f"R$ {float(bet_value):.2f}".replace('.', ',')
+    taxa_formatada = f"R$ {float(mediator_fee):.2f}".replace('.', ',')
+    
+    log(f"💰 Valores formatados: {valor_formatado} / {taxa_formatada}")
     
     embed = discord.Embed(
         title="Aposta - Aguardando Mediador",
