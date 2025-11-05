@@ -117,20 +117,32 @@ class Database:
     def add_active_bet(self, bet: Bet):
         """Adiciona uma aposta ativa"""
         data = self._load_data()
-        data['active_bets'][bet.bet_id] = bet.to_dict()
+        bet_dict = bet.to_dict()
+        # Garante que valores são float antes de salvar
+        bet_dict['bet_value'] = float(bet_dict['bet_value'])
+        bet_dict['mediator_fee'] = float(bet_dict['mediator_fee'])
+        data['active_bets'][bet.bet_id] = bet_dict
         self._save_data(data)
 
     def get_active_bet(self, bet_id: str) -> Optional[Bet]:
         """Retorna uma aposta ativa pelo ID"""
         data = self._load_data()
         bet_data = data['active_bets'].get(bet_id)
-        return Bet.from_dict(bet_data) if bet_data else None
+        if bet_data:
+            # Garante conversão float ao carregar
+            bet_data['bet_value'] = float(bet_data.get('bet_value', 0))
+            bet_data['mediator_fee'] = float(bet_data.get('mediator_fee', 0))
+            return Bet.from_dict(bet_data)
+        return None
 
     def get_bet_by_channel(self, channel_id: int) -> Optional[Bet]:
         """Retorna uma aposta pelo ID do canal"""
         data = self._load_data()
         for bet_data in data['active_bets'].values():
             if bet_data['channel_id'] == channel_id:
+                # Garante conversão float ao carregar
+                bet_data['bet_value'] = float(bet_data.get('bet_value', 0))
+                bet_data['mediator_fee'] = float(bet_data.get('mediator_fee', 0))
                 return Bet.from_dict(bet_data)
         return None
 
@@ -210,8 +222,8 @@ class Database:
         data['queue_metadata'][str(message_id)] = {
             'queue_id': queue_id,
             'mode': mode,
-            'bet_value': bet_value,
-            'mediator_fee': mediator_fee,
+            'bet_value': float(bet_value),  # Força conversão float
+            'mediator_fee': float(mediator_fee),  # Força conversão float
             'channel_id': channel_id,
             'message_id': message_id
         }
