@@ -206,6 +206,12 @@ class QueueButton(discord.ui.View):
         # Verifica se tem 2 jogadores para criar aposta
         if len(queue) >= 2:
                 log(f"🎯 2 jogadores encontrados na fila {queue_id}! Iniciando criação de aposta...")
+                log(f"💰 Valores antes de criar tópico: bet_value={bet_value} (type={type(bet_value)}), mediator_fee={mediator_fee} (type={type(mediator_fee)})")
+                
+                # Garante conversão para float
+                bet_value = float(bet_value)
+                mediator_fee = float(mediator_fee)
+                log(f"💰 Valores após conversão: bet_value={bet_value}, mediator_fee={mediator_fee}")
                 
                 # DEFER IMEDIATAMENTE para evitar timeout (3 segundos)
                 await interaction.response.defer(ephemeral=True)
@@ -881,6 +887,10 @@ async def create_bet_channel(guild: discord.Guild, mode: str, player1_id: int, p
             log(f"⚠️ Erro ao adicionar jogadores ao tópico: {e}")
 
         bet_id = f"{player1_id}_{player2_id}_{int(datetime.now().timestamp())}"
+        
+        # Log final antes de criar o objeto Bet
+        log(f"💰 Criando objeto Bet com valores: bet_value={bet_value} ({type(bet_value)}), mediator_fee={mediator_fee} ({type(mediator_fee)})")
+        
         bet = Bet(
             bet_id=bet_id,
             mode=mode,
@@ -888,10 +898,12 @@ async def create_bet_channel(guild: discord.Guild, mode: str, player1_id: int, p
             player2_id=player2_id,
             mediator_id=0,
             channel_id=thread.id,
-            bet_value=bet_value,
-            mediator_fee=mediator_fee
+            bet_value=float(bet_value),
+            mediator_fee=float(mediator_fee)
         )
         db.add_active_bet(bet)
+        
+        log(f"✅ Bet criado e salvo no banco: bet_value={bet.bet_value}, mediator_fee={bet.mediator_fee}")
     except Exception as e:
         log(f"Erro ao criar tópico de aposta: {e}")
         db.add_to_queue(mode, player1_id)
