@@ -9,10 +9,14 @@ from datetime import datetime
 from models.bet import Bet
 from utils.database import Database
 from aiohttp import web
+import asyncio
 
 # Função para logging com flush automático (necessário para Fly.io)
 def log(message):
     print(message, flush=True)
+
+# Lock global para evitar race conditions na criação de apostas
+queue_locks = {}
 
 # Detectar ambiente de execução
 IS_FLYIO = os.getenv("FLY_APP_NAME") is not None
@@ -62,8 +66,6 @@ MODES = ["1v1-misto", "1v1-mob", "2v2-misto", "2v2-mob"]
 ACTIVE_BETS_CATEGORY = "💰 Apostas Ativas"
 EMBED_COLOR = 0x5865F2
 CREATOR_FOOTER = "Bot feito por SKplay. Todos os direitos reservados | Criador: <@1339336477661724674>"
-ALLOWED_ROLE_ID = 1393707608254320671  # Cargo que pode criar filas sem ser admin
-ALLOWED_USER_ID = 1309895241851207681  # Usuário com permissões especiais
 
 # Dicionário para mapear queue_id -> (channel_id, message_id, mode, bet_value)
 queue_messages = {}
@@ -127,13 +129,11 @@ class QueueButton(discord.ui.View):
         # Busca metadados da fila do banco de dados
         metadata = db.get_queue_metadata(interaction.message.id)
         if metadata:
-            # Usa dados do DB (sempre corretos)
             mode = metadata['mode']
             bet_value = metadata['bet_value']
             mediator_fee = metadata['mediator_fee']
             queue_id = metadata['queue_id']
         else:
-            # Fallback para valores da instância (caso antigo)
             mode = self.mode
             bet_value = self.bet_value
             mediator_fee = self.mediator_fee
@@ -146,19 +146,24 @@ class QueueButton(discord.ui.View):
             )
             return
 
-        # Recarrega a fila para garantir que está atualizada
-        queue = db.get_queue(queue_id)
+        # Adquire lock para esta fila para evitar race conditions
+        if queue_id not in queue_locks:
+            queue_locks[queue_id] = asyncio.Lock()
+        
+        async with queue_locks[queue_id]:
+            # Recarrega a fila dentro do lock
+            queue = db.get_queue(queue_id)
 
-        if user_id in queue:
-            await interaction.response.send_message(
-                "Você já está nesta fila.",
-                ephemeral=True
-            )
-            return
+            if user_id in queue:
+                await interaction.response.send_message(
+                    "Você já está nesta fila.",
+                    ephemeral=True
+                )
+                return
 
-        # Adiciona à fila ANTES de responder
-        db.add_to_queue(queue_id, user_id)
-        queue = db.get_queue(queue_id)
+            # Adiciona à fila
+            db.add_to_queue(queue_id, user_id)
+            queue = db.get_queue(queue_id)
 
         # Responde ao usuário
         embed = discord.Embed(
@@ -196,16 +201,37 @@ class QueueButton(discord.ui.View):
 
         # Verifica se tem 2 jogadores para criar aposta
         if len(queue) >= 2:
-            player1_id = queue[0]
-            player2_id = queue[1]
+                player1_id = queue[0]
+                player2_id = queue[1]
 
-            db.remove_from_queue(queue_id, player1_id)
-            db.remove_from_queue(queue_id, player2_id)
+                # Valida se ambos jogadores ainda estão no servidor (economia de recursos)
+                try:
+                    player1 = interaction.guild.get_member(player1_id)
+                    player2 = interaction.guild.get_member(player2_id)
+                    
+                    if not player1 or not player2:
+                        # Se algum jogador saiu, remove-os da fila
+                        if not player1:
+                            db.remove_from_queue(queue_id, player1_id)
+                            log(f"Jogador {player1_id} removido da fila (não está mais no servidor)")
+                        if not player2:
+                            db.remove_from_queue(queue_id, player2_id)
+                            log(f"Jogador {player2_id} removido da fila (não está mais no servidor)")
+                        
+                        await self.update_queue_message(interaction)
+                        return
+                except Exception as e:
+                    log(f"Erro ao validar jogadores: {e}")
+                    return
 
-            # Atualiza a mensagem após remover os jogadores
-            await self.update_queue_message(interaction)
+                db.remove_from_queue(queue_id, player1_id)
+                db.remove_from_queue(queue_id, player2_id)
 
-            await create_bet_channel(interaction.guild, mode, player1_id, player2_id, bet_value, mediator_fee)
+                # Atualiza a mensagem após remover os jogadores
+                await self.update_queue_message(interaction)
+
+                # Passa o ID do canal atual para criar o tópico nele
+                await create_bet_channel(interaction.guild, mode, player1_id, player2_id, bet_value, mediator_fee, interaction.channel_id)
 
     @discord.ui.button(label='Sair da Fila', style=discord.ButtonStyle.gray, row=0, custom_id='persistent:leave_queue')
     async def leave_queue_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -379,15 +405,21 @@ class PixModal(discord.ui.Modal, title='Inserir Chave PIX'):
         except:
             pass
 
-        channel = interaction.guild.get_channel(bet.channel_id)
-        if channel:
-            perms = channel.overwrites_for(interaction.user)
-            perms.read_messages = True
-            perms.send_messages = True
-            await channel.set_permissions(interaction.user, overwrite=perms)
+        # Busca o tópico (thread) da aposta
+        thread = interaction.guild.get_thread(bet.channel_id)
+        if not thread:
+            # Tenta buscar threads arquivados
+            try:
+                thread = await interaction.guild.fetch_channel(bet.channel_id)
+            except:
+                pass
+        
+        if thread:
+            # Adiciona o mediador ao tópico
+            await thread.add_user(interaction.user)
 
-            # Envia uma mensagem no canal mencionando os jogadores (menções diretas)
-            await channel.send(f"<@{bet.player1_id}> <@{bet.player2_id}> Um mediador aceitou a aposta! ✅")
+            # Envia uma mensagem no tópico mencionando os jogadores
+            await thread.send(f"<@{bet.player1_id}> <@{bet.player2_id}> Um mediador aceitou a aposta! ✅")
 
 
 class AcceptMediationButton(discord.ui.View):
@@ -407,12 +439,21 @@ class AcceptMediationButton(discord.ui.View):
             await interaction.response.send_message("Esta aposta já tem um mediador.", ephemeral=True)
             return
 
-        is_admin = interaction.user.guild_permissions.administrator
-        has_allowed_role = discord.utils.get(interaction.user.roles, id=ALLOWED_ROLE_ID) is not None
-        is_allowed_user = interaction.user.id == ALLOWED_USER_ID
+        mediator_role_id = db.get_mediator_role(interaction.guild.id)
+        has_mediator_role = mediator_role_id and discord.utils.get(interaction.user.roles, id=mediator_role_id) is not None
 
-        if not is_admin and not has_allowed_role and not is_allowed_user:
-            await interaction.response.send_message("Apenas administradores, membros autorizados ou usuários especiais podem aceitar mediação.", ephemeral=True)
+        if not has_mediator_role:
+            if mediator_role_id:
+                await interaction.response.send_message(
+                    f"❌ Você precisa ter o cargo <@&{mediator_role_id}> para aceitar mediação.",
+                    ephemeral=True
+                )
+            else:
+                await interaction.response.send_message(
+                    "❌ Este servidor ainda não configurou um cargo de mediador.\n"
+                    "💡 Um administrador deve usar `/setup @cargo` para configurar.",
+                    ephemeral=True
+                )
             return
 
         await interaction.response.send_modal(PixModal(self.bet_id))
@@ -425,13 +466,22 @@ class AcceptMediationButton(discord.ui.View):
             await interaction.response.send_message("Aposta não encontrada.", ephemeral=True)
             return
 
-        # Verifica se é admin, tem o cargo permitido ou é o usuário especial
-        is_admin = interaction.user.guild_permissions.administrator
-        has_allowed_role = discord.utils.get(interaction.user.roles, id=ALLOWED_ROLE_ID) is not None
-        is_allowed_user = interaction.user.id == ALLOWED_USER_ID
+        # Verifica se tem o cargo de mediador configurado
+        mediator_role_id = db.get_mediator_role(interaction.guild.id)
+        has_mediator_role = mediator_role_id and discord.utils.get(interaction.user.roles, id=mediator_role_id) is not None
 
-        if not is_admin and not has_allowed_role and not is_allowed_user:
-            await interaction.response.send_message("Apenas administradores, membros autorizados ou usuários especiais podem cancelar apostas.", ephemeral=True)
+        if not has_mediator_role:
+            if mediator_role_id:
+                await interaction.response.send_message(
+                    f"❌ Você precisa ter o cargo <@&{mediator_role_id}> para cancelar apostas.",
+                    ephemeral=True
+                )
+            else:
+                await interaction.response.send_message(
+                    "❌ Este servidor ainda não configurou um cargo de mediador.\n"
+                    "💡 Um administrador deve usar `/setup @cargo` para configurar.",
+                    ephemeral=True
+                )
             return
 
         # Usa menções diretas (economiza chamadas API)
@@ -450,10 +500,30 @@ class AcceptMediationButton(discord.ui.View):
         await asyncio.sleep(10)
 
         try:
-            await interaction.channel.delete()
+            # Arquiva e bloqueia o tópico ao invés de deletar
+            if isinstance(interaction.channel, discord.Thread):
+                await interaction.channel.edit(archived=True, locked=True)
         except:
             pass
 
+
+async def cleanup_orphaned_data_task():
+    """Tarefa em background que limpa dados órfãos a cada 10 minutos"""
+    await bot.wait_until_ready()
+    log("🧹 Iniciando limpeza de dados órfãos (a cada 10 minutos)")
+    
+    while not bot.is_closed():
+        try:
+            # Aguarda 10 minutos
+            await asyncio.sleep(600)
+            
+            # Limpa dados órfãos
+            cleaned = db.cleanup_orphaned_data()
+            if cleaned:
+                log("🧹 Dados órfãos removidos (economia de espaço)")
+        except Exception as e:
+            log(f"Erro na limpeza de dados órfãos: {e}")
+            await asyncio.sleep(600)
 
 async def cleanup_expired_queues():
     """Tarefa em background que remove jogadores que ficaram muito tempo na fila"""
@@ -473,6 +543,19 @@ async def cleanup_expired_queues():
                     for user_id in user_ids:
                         db.remove_from_queue(queue_id, user_id)
                         log(f"⏱️ Removido usuário {user_id} da fila {queue_id} (timeout)")
+
+                    # Limpa filas completamente vazias e seu metadata
+                    queue = db.get_queue(queue_id)
+                    if not queue:
+                        # Extrai message_id do queue_id (formato: "mode_message_id")
+                        parts = queue_id.split('_')
+                        if len(parts) >= 2:
+                            try:
+                                message_id = int(parts[-1])
+                                db.delete_queue_metadata(message_id)
+                                log(f"🧹 Metadata removido para fila vazia {queue_id}")
+                            except ValueError:
+                                pass
 
                     # Atualiza a mensagem da fila se possível
                     if queue_id in queue_messages:
@@ -555,30 +638,38 @@ async def cleanup_expired_queues():
 
 @bot.event
 async def on_ready():
-    print(f'Bot conectado como {bot.user}')
-    print(f'Nome: {bot.user.name}')
-    print(f'ID: {bot.user.id}')
     try:
+        print(f'Bot conectado como {bot.user}')
+        print(f'Nome: {bot.user.name}')
+        print(f'ID: {bot.user.id}')
+        
         synced = await bot.tree.sync()
         print(f'{len(synced)} comandos sincronizados')
     except Exception as e:
-        print(f'Erro ao sincronizar comandos: {e}')
+        log(f'Erro ao sincronizar comandos: {e}')
+        # Não falha o startup por causa de erro de sync
 
     # Registrar views persistentes (para botões não expirarem)
     log('📋 Registrando views persistentes...')
     
-    # Registrar QueueButton como view persistente
-    # Os valores aqui não importam pois a view busca dados reais do banco de dados
-    # usando interaction.message.id quando o botão é clicado
-    bot.add_view(QueueButton(mode="", bet_value=0, mediator_fee=0))
-    bot.add_view(ConfirmPaymentButton(bet_id=""))
-    # AcceptMediationButton e DeclareWinnerButton não têm timeout=None nos botões cancel
-    # então não podem ser registradas como persistentes
-    
-    log('✅ Views persistentes registradas')
+    # Registra apenas UMA VEZ cada view persistente
+    # IMPORTANTE: Não criar novas instâncias, reutilizar as mesmas
+    if not hasattr(bot, '_persistent_views_registered'):
+        bot.add_view(QueueButton(mode="", bet_value=0, mediator_fee=0))
+        bot.add_view(ConfirmPaymentButton(bet_id=""))
+        bot._persistent_views_registered = True
+        log('✅ Views persistentes registradas')
+    else:
+        log('ℹ️ Views persistentes já estavam registradas')
 
-    # Inicia a tarefa de limpeza automática de filas
-    bot.loop.create_task(cleanup_expired_queues())
+    # Inicia a tarefa de limpeza automática de filas (apenas uma vez)
+    if not hasattr(bot, '_cleanup_task_started'):
+        bot.loop.create_task(cleanup_expired_queues())
+        bot.loop.create_task(cleanup_orphaned_data_task())
+        bot._cleanup_task_started = True
+        log('🧹 Tarefas de limpeza iniciadas')
+    else:
+        log('ℹ️ Tarefas de limpeza já estavam rodando')
 
 
 
@@ -597,16 +688,24 @@ async def on_ready():
     app_commands.Choice(name="2v2 Mob", value="2v2-mob"),
 ])
 async def mostrar_fila(interaction: discord.Interaction, modo: app_commands.Choice[str], valor: float, taxa: float):
-    # Verifica se é admin, tem o cargo permitido ou é o usuário especial
-    is_admin = interaction.user.guild_permissions.administrator
-    has_allowed_role = discord.utils.get(interaction.user.roles, id=ALLOWED_ROLE_ID) is not None
-    is_allowed_user = interaction.user.id == ALLOWED_USER_ID
+    # Busca o cargo de mediador configurado
+    mediator_role_id = db.get_mediator_role(interaction.guild.id)
+    
+    # Verifica se tem o cargo de mediador configurado
+    has_mediator_role = mediator_role_id and discord.utils.get(interaction.user.roles, id=mediator_role_id) is not None
 
-    if not is_admin and not has_allowed_role and not is_allowed_user:
-        await interaction.response.send_message(
-            f"❌ Você precisa ser administrador ou ter o cargo <@&{ALLOWED_ROLE_ID}> para usar este comando.",
-            ephemeral=True
-        )
+    if not has_mediator_role:
+        if mediator_role_id:
+            await interaction.response.send_message(
+                f"❌ Você precisa ter o cargo <@&{mediator_role_id}> para usar este comando.",
+                ephemeral=True
+            )
+        else:
+            await interaction.response.send_message(
+                "❌ Este servidor ainda não configurou um cargo de mediador.\n"
+                "💡 Um administrador deve usar `/setup @cargo` para configurar.",
+                ephemeral=True
+            )
         return
 
     mode = modo.value
@@ -642,7 +741,8 @@ async def mostrar_fila(interaction: discord.Interaction, modo: app_commands.Choi
 
 
 
-async def create_bet_channel(guild: discord.Guild, mode: str, player1_id: int, player2_id: int, bet_value: float, mediator_fee: float):
+async def create_bet_channel(guild: discord.Guild, mode: str, player1_id: int, player2_id: int, bet_value: float, mediator_fee: float, source_channel_id: int = None):
+    # Validação dupla com lock para evitar race condition
     if db.is_user_in_active_bet(player1_id) or db.is_user_in_active_bet(player2_id):
         log(f"Um dos jogadores já está em uma aposta ativa. Abortando criação.")
         return
@@ -651,23 +751,39 @@ async def create_bet_channel(guild: discord.Guild, mode: str, player1_id: int, p
     db.remove_from_all_queues(player2_id)
 
     try:
-        player1 = await guild.fetch_member(player1_id)
-        player2 = await guild.fetch_member(player2_id)
+        # Usa get_member ao invés de fetch_member (mais rápido, sem API call)
+        player1 = guild.get_member(player1_id)
+        player2 = guild.get_member(player2_id)
+        
+        # Se não encontrou no cache, só então faz fetch
+        if not player1:
+            player1 = await guild.fetch_member(player1_id)
+        if not player2:
+            player2 = await guild.fetch_member(player2_id)
 
-        category = discord.utils.get(guild.categories, name=ACTIVE_BETS_CATEGORY)
-        if not category:
-            category = await guild.create_category(ACTIVE_BETS_CATEGORY)
+        # Busca o canal de origem (onde foi usado /mostrar-fila)
+        source_channel = guild.get_channel(source_channel_id) if source_channel_id else None
+        
+        if not source_channel:
+            log(f"Canal de origem não encontrado. Abortando criação.")
+            db.add_to_queue(mode, player1_id)
+            db.add_to_queue(mode, player2_id)
+            return
 
-        channel_name = f"aposta-{player1.name}-vs-{player2.name}"
-
-        overwrites = {
-            guild.default_role: discord.PermissionOverwrite(read_messages=False),
-            player1: discord.PermissionOverwrite(read_messages=True, send_messages=True),
-            player2: discord.PermissionOverwrite(read_messages=True, send_messages=True),
-            guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True)
-        }
-
-        channel = await category.create_text_channel(name=channel_name, overwrites=overwrites)
+        # Criar tópico ao invés de canal
+        thread_name = f"Aposta: {player1.name} vs {player2.name}"
+        
+        # Cria um tópico privado
+        thread = await source_channel.create_thread(
+            name=thread_name,
+            type=discord.ChannelType.private_thread,
+            auto_archive_duration=1440,  # 24 horas
+            invitable=False
+        )
+        
+        # Adiciona os jogadores ao tópico
+        await thread.add_user(player1)
+        await thread.add_user(player2)
 
         bet_id = f"{player1_id}_{player2_id}_{int(datetime.now().timestamp())}"
         bet = Bet(
@@ -676,19 +792,25 @@ async def create_bet_channel(guild: discord.Guild, mode: str, player1_id: int, p
             player1_id=player1_id,
             player2_id=player2_id,
             mediator_id=0,
-            channel_id=channel.id,
+            channel_id=thread.id,
             bet_value=bet_value,
             mediator_fee=mediator_fee
         )
         db.add_active_bet(bet)
     except Exception as e:
-        log(f"Erro ao criar canal de aposta: {e}")
+        log(f"Erro ao criar tópico de aposta: {e}")
         db.add_to_queue(mode, player1_id)
         db.add_to_queue(mode, player2_id)
         return
 
-    admin_role = discord.utils.get(guild.roles, permissions=discord.Permissions(administrator=True))
-    admin_mention = admin_role.mention if admin_role else "@Administradores"
+    # Busca o cargo de mediador configurado
+    mediator_role_id = db.get_mediator_role(guild.id)
+    
+    if mediator_role_id:
+        mediator_role = guild.get_role(mediator_role_id)
+        admin_mention = mediator_role.mention if mediator_role else "@Mediadores"
+    else:
+        admin_mention = "@Mediadores (configure com /setup)"
 
     embed = discord.Embed(
         title="Aposta - Aguardando Mediador",
@@ -705,7 +827,7 @@ async def create_bet_channel(guild: discord.Guild, mode: str, player1_id: int, p
 
     view = AcceptMediationButton(bet_id)
 
-    await channel.send(content=f"{player1.mention} {player2.mention} Aposta criada! Aguardando mediador... {admin_mention}", embed=embed, view=view)
+    await thread.send(content=f"{player1.mention} {player2.mention} Aposta criada! Aguardando mediador... {admin_mention}", embed=embed, view=view)
 
 
 @bot.tree.command(name="confirmar-pagamento", description="Confirmar que você enviou o pagamento ao mediador")
@@ -796,14 +918,19 @@ async def finalizar_aposta(interaction: discord.Interaction, vencedor: discord.M
 
     if not bet:
         await interaction.response.send_message(
-            "Este canal não é uma aposta ativa.",
+            "Este tópico não é uma aposta ativa.",
             ephemeral=True
         )
         return
 
-    if interaction.user.id != bet.mediator_id:
+    # Verifica se é o mediador da aposta OU se tem o cargo de mediador
+    mediator_role_id = db.get_mediator_role(interaction.guild.id)
+    has_mediator_role = mediator_role_id and discord.utils.get(interaction.user.roles, id=mediator_role_id) is not None
+    is_bet_mediator = interaction.user.id == bet.mediator_id
+
+    if not is_bet_mediator and not has_mediator_role:
         await interaction.response.send_message(
-            "Apenas o mediador pode finalizar esta aposta.",
+            "❌ Apenas o mediador desta aposta ou membros com o cargo de mediador podem finalizá-la.",
             ephemeral=True
         )
         return
@@ -838,7 +965,9 @@ async def finalizar_aposta(interaction: discord.Interaction, vencedor: discord.M
     await asyncio.sleep(10)
 
     try:
-        await interaction.channel.delete()
+        # Arquiva e bloqueia o tópico ao invés de deletar
+        if isinstance(interaction.channel, discord.Thread):
+            await interaction.channel.edit(archived=True, locked=True)
     except:
         pass
 
@@ -849,14 +978,19 @@ async def cancelar_aposta(interaction: discord.Interaction):
 
     if not bet:
         await interaction.response.send_message(
-            "Este canal não é uma aposta ativa.",
+            "Este tópico não é uma aposta ativa.",
             ephemeral=True
         )
         return
 
-    if interaction.user.id != bet.mediator_id:
+    # Verifica se é o mediador da aposta OU se tem o cargo de mediador
+    mediator_role_id = db.get_mediator_role(interaction.guild.id)
+    has_mediator_role = mediator_role_id and discord.utils.get(interaction.user.roles, id=mediator_role_id) is not None
+    is_bet_mediator = interaction.user.id == bet.mediator_id
+
+    if not is_bet_mediator and not has_mediator_role:
         await interaction.response.send_message(
-            "Apenas o mediador pode cancelar esta aposta.",
+            "❌ Apenas o mediador desta aposta ou membros com o cargo de mediador podem cancelá-la.",
             ephemeral=True
         )
         return
@@ -880,7 +1014,9 @@ async def cancelar_aposta(interaction: discord.Interaction):
     await asyncio.sleep(10)
 
     try:
-        await interaction.channel.delete()
+        # Arquiva e bloqueia o tópico ao invés de deletar
+        if isinstance(interaction.channel, discord.Thread):
+            await interaction.channel.edit(archived=True, locked=True)
     except:
         pass
 
@@ -1006,9 +1142,17 @@ async def desbugar_filas(interaction: discord.Interaction):
     # Cancelar todas as apostas ativas
     for bet_id, bet in list(active_bets.items()):
         try:
-            channel = interaction.guild.get_channel(bet.channel_id)
-            if channel:
-                await channel.delete()
+            # Tenta buscar como thread
+            thread = interaction.guild.get_thread(bet.channel_id)
+            if not thread:
+                # Tenta buscar como canal
+                thread = interaction.guild.get_channel(bet.channel_id)
+            
+            if thread:
+                if isinstance(thread, discord.Thread):
+                    await thread.edit(archived=True, locked=True)
+                else:
+                    await thread.delete()
                 deleted_channels += 1
         except:
             pass
@@ -1037,6 +1181,41 @@ async def desbugar_filas(interaction: discord.Interaction):
     embed.set_footer(text=f"{CREATOR_FOOTER} | Executado por {interaction.user.name}")
 
     await interaction.followup.send(embed=embed, ephemeral=True)
+
+
+@bot.tree.command(name="setup", description="[ADMIN] Configurar cargo de mediador para este servidor")
+@app_commands.describe(cargo="Cargo que poderá mediar apostas")
+async def setup(interaction: discord.Interaction, cargo: discord.Role):
+    # Apenas administradores podem usar este comando
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message(
+            "❌ Apenas administradores podem usar este comando.",
+            ephemeral=True
+        )
+        return
+    
+    # Salvar o cargo de mediador no banco de dados
+    db.set_mediator_role(interaction.guild.id, cargo.id)
+    
+    embed = discord.Embed(
+        title="✅ Configuração Salva",
+        description=f"Cargo de mediador definido como {cargo.mention}",
+        color=EMBED_COLOR
+    )
+    embed.add_field(
+        name="Permissões",
+        value=f"Membros com o cargo {cargo.mention} agora podem:\n"
+              "• Aceitar mediação de apostas\n"
+              "• Finalizar apostas\n"
+              "• Cancelar apostas\n"
+              "• Criar filas com `/mostrar-fila`",
+        inline=False
+    )
+    if interaction.guild.icon:
+        embed.set_thumbnail(url=interaction.guild.icon.url)
+    embed.set_footer(text=CREATOR_FOOTER)
+    
+    await interaction.response.send_message(embed=embed)
 
 
 @bot.tree.command(name="ajuda", description="Ver todos os comandos disponíveis")
@@ -1069,15 +1248,24 @@ async def ajuda(interaction: discord.Interaction):
     )
 
     embed.add_field(
+        name="Comandos para Administradores",
+        value=(
+            "`/setup` - Configurar cargo de mediador do servidor"
+        ),
+        inline=False
+    )
+
+    embed.add_field(
         name="Como Funciona",
         value=(
-            "1. Moderadores criam filas com `/mostrar-fila`\n"
-            "2. Clique no botão 'Entrar na Fila' da mensagem\n"
-            "3. Quando encontrar outro jogador, um canal privado será criado\n"
-            "4. Envie o valor da aposta para o mediador\n"
-            "5. Confirme com `/confirmar-pagamento`\n"
-            "6. Jogue a partida\n"
-            "7. O mediador declara o vencedor com `/finalizar-aposta`"
+            "1. Admins usam `/setup @cargo` para definir quem pode mediar\n"
+            "2. Moderadores criam filas com `/mostrar-fila`\n"
+            "3. Clique no botão 'Entrar na Fila' da mensagem\n"
+            "4. Quando encontrar outro jogador, um canal privado será criado\n"
+            "5. Envie o valor da aposta para o mediador\n"
+            "6. Confirme com `/confirmar-pagamento`\n"
+            "7. Jogue a partida\n"
+            "8. O mediador declara o vencedor com `/finalizar-aposta`"
         ),
         inline=False
     )
@@ -1144,23 +1332,141 @@ async def run_bot_with_webserver():
         raise
 
 
+def create_bot_instance():
+    """Cria uma nova instância do bot com todos os comandos e eventos"""
+    new_bot = commands.Bot(
+        command_prefix="!",
+        intents=intents,
+        chunk_guilds_at_startup=False,
+        member_cache_flags=discord.MemberCacheFlags.none(),
+        max_messages=10
+    )
+    
+    # Criar função de limpeza específica para esta instância do bot
+    async def cleanup_for_this_bot():
+        """Tarefa em background que remove jogadores que ficaram muito tempo na fila"""
+        await new_bot.wait_until_ready()
+        log(f"🧹 Iniciando sistema de limpeza automática de filas para {new_bot.user.name}")
+
+        while not new_bot.is_closed():
+            try:
+                expired_players = db.get_expired_queue_players(timeout_minutes=5)
+
+                if expired_players:
+                    log(f"🧹 [{new_bot.user.name}] Encontrados jogadores expirados em {len(expired_players)} filas")
+
+                    for queue_id, user_ids in expired_players.items():
+                        for user_id in user_ids:
+                            db.remove_from_queue(queue_id, user_id)
+                            log(f"⏱️ [{new_bot.user.name}] Removido usuário {user_id} da fila {queue_id} (timeout)")
+
+                        if queue_id in queue_messages:
+                            channel_id, message_id, mode, bet_value = queue_messages[queue_id]
+                            try:
+                                channel = new_bot.get_channel(channel_id)
+                                if channel:
+                                    message = await channel.fetch_message(message_id)
+                                    queue = db.get_queue(queue_id)
+                                    
+                                    player_names = [f"<@{uid}>" for uid in queue]
+                                    players_text = "\n".join(player_names) if player_names else "Vazio"
+
+                                    embed = discord.Embed(
+                                        title=mode.replace('-', ' ').title(),
+                                        color=EMBED_COLOR
+                                    )
+                                    embed.add_field(name="Valor", value=f"R$ {bet_value:.2f}".replace('.', ','), inline=True)
+                                    embed.add_field(name="Fila", value=players_text, inline=True)
+                                    if channel.guild.icon:
+                                        embed.set_thumbnail(url=channel.guild.icon.url)
+                                    await message.edit(embed=embed)
+                            except Exception as e:
+                                log(f"Erro ao atualizar mensagem da fila {queue_id}: {e}")
+
+                await asyncio.sleep(60)
+
+            except Exception as e:
+                log(f"Erro na limpeza de filas [{new_bot.user.name}]: {e}")
+                await asyncio.sleep(60)
+    
+    # Registrar evento on_ready
+    @new_bot.event
+    async def on_ready():
+        print(f'Bot conectado como {new_bot.user}')
+        print(f'Nome: {new_bot.user.name}')
+        print(f'ID: {new_bot.user.id}')
+        try:
+            synced = await new_bot.tree.sync()
+            print(f'{len(synced)} comandos sincronizados')
+        except Exception as e:
+            print(f'Erro ao sincronizar comandos: {e}')
+
+        # Registrar views persistentes
+        log('📋 Registrando views persistentes...')
+        new_bot.add_view(QueueButton(mode="", bet_value=0, mediator_fee=0))
+        new_bot.add_view(ConfirmPaymentButton(bet_id=""))
+        log('✅ Views persistentes registradas')
+
+        # Inicia a tarefa de limpeza automática de filas para ESTE bot
+        new_bot.loop.create_task(cleanup_for_this_bot())
+    
+    # Copiar todos os comandos da árvore do bot original
+    for command in bot.tree.get_commands():
+        new_bot.tree.add_command(command)
+    
+    return new_bot
+
+async def run_multiple_bots():
+    """Roda múltiplos bots simultaneamente com tokens diferentes"""
+    # Pegar os 3 tokens do ambiente
+    token1 = os.getenv("DISCORD_TOKEN_1") or os.getenv("DISCORD_TOKEN") or ""
+    token2 = os.getenv("DISCORD_TOKEN_2") or ""
+    token3 = os.getenv("DISCORD_TOKEN_3") or ""
+    
+    tokens = [t for t in [token1, token2, token3] if t]
+    
+    if not tokens:
+        raise Exception("Configure pelo menos DISCORD_TOKEN_1 nas variáveis de ambiente.")
+    
+    # Limita a 3 bots para economizar recursos
+    if len(tokens) > 3:
+        log("⚠️ AVISO: Mais de 3 tokens configurados. Limitando a 3 bots para economizar recursos.")
+        tokens = tokens[:3]
+    
+    log(f"🤖 Iniciando {len(tokens)} bot(s)...")
+    
+    # Criar uma instância de bot para cada token
+    tasks = []
+    
+    for i, token in enumerate(tokens, 1):
+        new_bot = create_bot_instance()
+        log(f"🚀 Iniciando bot #{i}...")
+        tasks.append(new_bot.start(token, reconnect=True))
+    
+    # Rodar todos os bots simultaneamente
+    await asyncio.gather(*tasks, return_exceptions=True)
+
 try:
     if IS_FLYIO:
-        log("Iniciando bot no Fly.io com servidor HTTP...")
+        log("Iniciando bots no Fly.io com servidor HTTP...")
     elif IS_RAILWAY:
-        log("Iniciando bot no Railway com servidor HTTP...")
+        log("Iniciando bots no Railway com servidor HTTP...")
     else:
-        log("Iniciando bot no Replit/Local...")
+        log("Iniciando bots no Replit/Local...")
 
-    # Rodar bot com servidor web em ambientes de produção
+    # Rodar múltiplos bots com servidor web em ambientes de produção
     if IS_FLYIO or IS_RAILWAY:
-        asyncio.run(run_bot_with_webserver())
+        async def run_all():
+            # Iniciar servidor web primeiro
+            await start_web_server()
+            await asyncio.sleep(1)
+            # Iniciar múltiplos bots
+            await run_multiple_bots()
+        
+        asyncio.run(run_all())
     else:
-        # No Replit/Local, rodar apenas o bot
-        token = os.getenv("DISCORD_TOKEN") or os.getenv("TOKEN") or ""
-        if token == "":
-            raise Exception("Por favor, adicione seu token do Discord nas variáveis de ambiente (DISCORD_TOKEN).")
-        bot.run(token)
+        # No Replit/Local, rodar múltiplos bots
+        asyncio.run(run_multiple_bots())
 
 except discord.HTTPException as e:
     if e.status == 429:
@@ -1169,7 +1475,7 @@ except discord.HTTPException as e:
     else:
         raise e
 except Exception as e:
-    log(f"Erro ao iniciar o bot: {e}")
+    log(f"Erro ao iniciar os bots: {e}")
     if IS_RAILWAY:
         # No Railway, queremos saber exatamente o que deu errado
         import traceback

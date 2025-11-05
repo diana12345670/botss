@@ -27,7 +27,7 @@ class Database:
         """Garante que o arquivo de dados existe"""
         os.makedirs(os.path.dirname(self.data_file), exist_ok=True)
         if not os.path.exists(self.data_file):
-            self._save_data({'queues': {}, 'queue_timestamps': {}, 'queue_metadata': {}, 'active_bets': {}, 'bet_history': []})
+            self._save_data({'queues': {}, 'queue_timestamps': {}, 'queue_metadata': {}, 'active_bets': {}, 'bet_history': [], 'mediator_roles': {}})
 
     def _load_data(self) -> dict:
         """Carrega dados do arquivo"""
@@ -42,37 +42,50 @@ class Database:
     def add_to_queue(self, queue_id: str, user_id: int):
         """Adiciona um jogador à fila"""
         data = self._load_data()
-        if queue_id not in data['queues']:
-            data['queues'][queue_id] = []
+        
+        # Inicializa estruturas se não existirem
+        if 'queues' not in data:
+            data['queues'] = {}
         if 'queue_timestamps' not in data:
             data['queue_timestamps'] = {}
+        
+        if queue_id not in data['queues']:
+            data['queues'][queue_id] = []
         if queue_id not in data['queue_timestamps']:
             data['queue_timestamps'][queue_id] = {}
-        
+
         if user_id not in data['queues'][queue_id]:
+            # Limita o tamanho da fila para evitar memory leaks (máx 10 jogadores)
+            if len(data['queues'][queue_id]) >= 10:
+                # Remove o jogador mais antigo
+                oldest_user = data['queues'][queue_id].pop(0)
+                if str(oldest_user) in data['queue_timestamps'][queue_id]:
+                    del data['queue_timestamps'][queue_id][str(oldest_user)]
+            
             data['queues'][queue_id].append(user_id)
             # Armazena o timestamp quando o jogador entra na fila
             data['queue_timestamps'][queue_id][str(user_id)] = datetime.now().isoformat()
+        
         self._save_data(data)
 
     def remove_from_queue(self, queue_id: str, user_id: int):
         """Remove um jogador da fila"""
         data = self._load_data()
-        
+
         # Remove da fila
         if queue_id in data['queues'] and user_id in data['queues'][queue_id]:
             data['queues'][queue_id].remove(user_id)
-        
+
         # Garante que queue_timestamps existe
         if 'queue_timestamps' not in data:
             data['queue_timestamps'] = {}
-        
+
         # Remove o timestamp
         if queue_id in data['queue_timestamps']:
             user_id_str = str(user_id)
             if user_id_str in data['queue_timestamps'][queue_id]:
                 del data['queue_timestamps'][queue_id][user_id_str]
-        
+
         self._save_data(data)
 
     def get_queue(self, queue_id: str) -> List[int]:
@@ -145,33 +158,42 @@ class Database:
         data = self._load_data()
         return {bet_id: Bet.from_dict(bet_data) for bet_id, bet_data in data['active_bets'].items()}
 
-    def get_expired_queue_players(self, timeout_minutes: int = 2) -> Dict[str, List[int]]:
+    def get_expired_queue_players(self, timeout_minutes: int = 5):
         """Retorna jogadores que estão há mais de X minutos na fila
-        Retorna um dicionário: {queue_id: [user_ids]}"""
+
+        Returns:
+            dict: {queue_id: [user_ids]} de jogadores expirados
+        """
         data = self._load_data()
         expired = {}
-        
-        if 'queue_timestamps' not in data:
-            return expired
-        
-        now = datetime.now()
-        timeout_delta = timedelta(minutes=timeout_minutes)
-        
-        for queue_id, timestamps in data['queue_timestamps'].items():
+        current_time = datetime.now()
+
+        for queue_id, timestamps in data.get('queue_timestamps', {}).items():
             expired_users = []
             for user_id_str, timestamp_str in timestamps.items():
-                try:
-                    timestamp = datetime.fromisoformat(timestamp_str)
-                    if now - timestamp > timeout_delta:
-                        expired_users.append(int(user_id_str))
-                except:
-                    # Se houver erro ao converter, considera expirado
+                join_time = datetime.fromisoformat(timestamp_str)
+                time_diff = (current_time - join_time).total_seconds() / 60
+
+                if time_diff >= timeout_minutes:
                     expired_users.append(int(user_id_str))
-            
+
             if expired_users:
                 expired[queue_id] = expired_users
-        
+
         return expired
+
+    def set_mediator_role(self, guild_id: int, role_id: int):
+        """Define o cargo de mediador para um servidor"""
+        data = self._load_data()
+        if 'mediator_roles' not in data:
+            data['mediator_roles'] = {}
+        data['mediator_roles'][str(guild_id)] = role_id
+        self._save_data(data)
+
+    def get_mediator_role(self, guild_id: int):
+        """Retorna o ID do cargo de mediador configurado para o servidor"""
+        data = self._load_data()
+        return data.get('mediator_roles', {}).get(str(guild_id))
 
     def get_all_queue_ids(self) -> List[str]:
         """Retorna todos os IDs de filas existentes"""
@@ -183,7 +205,7 @@ class Database:
         data = self._load_data()
         if 'queue_metadata' not in data:
             data['queue_metadata'] = {}
-        
+
         queue_id = f"{mode}_{message_id}"
         data['queue_metadata'][str(message_id)] = {
             'queue_id': queue_id,
@@ -207,8 +229,48 @@ class Database:
         data = self._load_data()
         if 'queue_metadata' not in data:
             return
-        
+
         message_id_str = str(message_id)
         if message_id_str in data['queue_metadata']:
             del data['queue_metadata'][message_id_str]
             self._save_data(data)
+
+    def cleanup_orphaned_data(self):
+        """Remove dados órfãos (filas vazias, timestamps sem fila, etc.) para economizar espaço"""
+        data = self._load_data()
+        cleaned = False
+        
+        # Remove filas vazias
+        if 'queues' in data:
+            empty_queues = [qid for qid, queue in data['queues'].items() if not queue]
+            for qid in empty_queues:
+                del data['queues'][qid]
+                cleaned = True
+        
+        # Remove timestamps de filas que não existem mais
+        if 'queue_timestamps' in data and 'queues' in data:
+            orphaned_timestamps = [qid for qid in data['queue_timestamps'].keys() if qid not in data['queues']]
+            for qid in orphaned_timestamps:
+                del data['queue_timestamps'][qid]
+                cleaned = True
+        
+        # Remove timestamps de usuários que não estão mais na fila
+        if 'queue_timestamps' in data and 'queues' in data:
+            for qid in list(data['queue_timestamps'].keys()):
+                if qid in data['queues']:
+                    queue_users = set(map(str, data['queues'][qid]))
+                    timestamp_users = set(data['queue_timestamps'][qid].keys())
+                    orphaned_users = timestamp_users - queue_users
+                    for user_id in orphaned_users:
+                        del data['queue_timestamps'][qid][user_id]
+                        cleaned = True
+        
+        # Limita histórico de apostas a 100 entradas mais recentes
+        if 'bet_history' in data and len(data['bet_history']) > 100:
+            data['bet_history'] = data['bet_history'][-100:]
+            cleaned = True
+        
+        if cleaned:
+            self._save_data(data)
+            return True
+        return False
