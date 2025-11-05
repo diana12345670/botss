@@ -89,28 +89,42 @@ class QueueButton(discord.ui.View):
         self.message_id = message_id
         self.queue_id = f"{mode}_{message_id}" if message_id else ""
 
-    async def update_queue_message(self, interaction: discord.Interaction):
-        """Atualiza a mensagem da fila com os jogadores atuais"""
-        # Busca metadados da fila do banco de dados
-        metadata = db.get_queue_metadata(interaction.message.id)
-        if metadata:
-            mode = metadata['mode']
-            bet_value = metadata['bet_value']
-            queue_id = metadata['queue_id']
-            message_id = metadata['message_id']
+    async def update_queue_message(self, channel, guild_icon_url=None, original_message_id=None):
+        """Atualiza a mensagem da fila com os jogadores atuais
+        
+        Args:
+            channel: Canal onde a mensagem está
+            guild_icon_url: URL do ícone do servidor (opcional)
+            original_message_id: ID da mensagem original da fila (usado para buscar metadados após restart)
+        """
+        # Se não temos message_id na instância, tenta buscar dos metadados
+        if not self.message_id and original_message_id:
+            metadata = db.get_queue_metadata(original_message_id)
+            if metadata:
+                mode = metadata['mode']
+                bet_value = metadata['bet_value']
+                queue_id = metadata['queue_id']
+                message_id = metadata['message_id']
+                log(f"📋 Metadados recuperados do banco para mensagem {original_message_id}")
+            else:
+                log(f"⚠️ update_queue_message: metadados não encontrados para mensagem {original_message_id}")
+                return
         else:
-            # Fallback para valores da instância
+            # Usa os valores da instância diretamente
             mode = self.mode
             bet_value = self.bet_value
             queue_id = self.queue_id
             message_id = self.message_id
 
         if not message_id:
+            log("⚠️ update_queue_message: message_id não disponível")
             return
 
         try:
-            message = await interaction.channel.fetch_message(message_id)
+            message = await channel.fetch_message(message_id)
             queue = db.get_queue(queue_id)
+            
+            log(f"📊 Atualizando fila {queue_id}: {len(queue)} jogadores restantes")
 
             # Usa menções diretas (sem fetch - mais rápido e econômico)
             player_names = [f"<@{user_id}>" for user_id in queue]
@@ -123,13 +137,14 @@ class QueueButton(discord.ui.View):
 
             embed.add_field(name="Valor", value=f"R$ {bet_value:.2f}".replace('.', ','), inline=True)
             embed.add_field(name="Fila", value=players_text if players_text != "Nenhum jogador na fila" else "Vazio", inline=True)
-            if interaction.guild.icon:
-                embed.set_thumbnail(url=interaction.guild.icon.url)
+            if guild_icon_url:
+                embed.set_thumbnail(url=guild_icon_url)
             embed.set_footer(text=CREATOR_FOOTER)
 
             await message.edit(embed=embed)
+            log(f"✅ Mensagem da fila {queue_id} editada com sucesso")
         except Exception as e:
-            log(f"Erro ao atualizar mensagem da fila: {e}")
+            log(f"❌ Erro ao atualizar mensagem da fila: {e}")
 
     @discord.ui.button(label='Entrar na Fila', style=discord.ButtonStyle.blurple, row=0, custom_id='persistent:join_queue')
     async def join_queue_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -227,17 +242,25 @@ class QueueButton(discord.ui.View):
                             db.remove_from_queue(queue_id, player2_id)
                             log(f"Jogador {player2_id} removido da fila (não está mais no servidor)")
 
-                        await self.update_queue_message(interaction)
+                        guild_icon = interaction.guild.icon.url if interaction.guild.icon else None
+                        await self.update_queue_message(interaction.channel, guild_icon, interaction.message.id)
                         return
                 except Exception as e:
                     log(f"Erro ao validar jogadores: {e}")
                     return
 
+                # Remove os jogadores da fila
                 db.remove_from_queue(queue_id, player1_id)
                 db.remove_from_queue(queue_id, player2_id)
+                log(f"🗑️ Removidos {player1_id} e {player2_id} da fila {queue_id}")
 
                 # Atualiza a mensagem após remover os jogadores
-                await self.update_queue_message(interaction)
+                try:
+                    guild_icon = interaction.guild.icon.url if interaction.guild.icon else None
+                    await self.update_queue_message(interaction.channel, guild_icon, interaction.message.id)
+                    log(f"✅ Mensagem da fila atualizada")
+                except Exception as e:
+                    log(f"⚠️ Erro ao atualizar mensagem da fila: {e}")
 
                 # Passa o ID do canal atual para criar o tópico nele
                 await create_bet_channel(interaction.guild, mode, player1_id, player2_id, bet_value, mediator_fee, interaction.channel_id)
@@ -275,7 +298,8 @@ class QueueButton(discord.ui.View):
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
         # Atualiza a mensagem principal
-        await self.update_queue_message(interaction)
+        guild_icon = interaction.guild.icon.url if interaction.guild.icon else None
+        await self.update_queue_message(interaction.channel, guild_icon, interaction.message.id)
 
 
 class ConfirmPaymentButton(discord.ui.View):
@@ -765,17 +789,38 @@ async def create_bet_channel(guild: discord.Guild, mode: str, player1_id: int, p
         # Criar tópico ao invés de canal
         thread_name = f"Aposta: {player1.name} vs {player2.name}"
 
-        # Cria um tópico privado
-        thread = await source_channel.create_thread(
-            name=thread_name,
-            type=discord.ChannelType.private_thread,
-            auto_archive_duration=1440,  # 24 horas
-            invitable=False
-        )
+        try:
+            # Cria um tópico privado
+            thread = await source_channel.create_thread(
+                name=thread_name,
+                type=discord.ChannelType.private_thread,
+                auto_archive_duration=1440,  # 24 horas
+                invitable=False
+            )
+            log(f"✅ Tópico criado: {thread_name} (ID: {thread.id})")
+        except discord.Forbidden:
+            log(f"❌ Sem permissão para criar tópico privado. Tentando tópico público...")
+            try:
+                # Fallback: tentar criar tópico público
+                thread = await source_channel.create_thread(
+                    name=thread_name,
+                    auto_archive_duration=1440
+                )
+                log(f"✅ Tópico público criado: {thread_name} (ID: {thread.id})")
+            except Exception as e:
+                log(f"❌ Erro ao criar tópico público: {e}")
+                raise
+        except Exception as e:
+            log(f"❌ Erro ao criar tópico: {e}")
+            raise
 
         # Adiciona os jogadores ao tópico
-        await thread.add_user(player1)
-        await thread.add_user(player2)
+        try:
+            await thread.add_user(player1)
+            await thread.add_user(player2)
+            log(f"✅ Jogadores adicionados ao tópico")
+        except Exception as e:
+            log(f"⚠️ Erro ao adicionar jogadores ao tópico: {e}")
 
         bet_id = f"{player1_id}_{player2_id}_{int(datetime.now().timestamp())}"
         bet = Bet(
@@ -1461,27 +1506,46 @@ try:
             # Iniciar servidor web primeiro
             await start_web_server()
             await asyncio.sleep(1)
-            # No Fly.io, rodar múltiplos bots (DISCORD_TOKEN_1 e DISCORD_TOKEN_2)
-            log("🤖 Fly.io: Modo múltiplos bots ativado (mesma máquina)")
-            await run_multiple_bots()
+            
+            # No Fly.io, usar apenas 1 bot por deployment para estabilidade
+            token = os.getenv("DISCORD_TOKEN") or os.getenv("DISCORD_TOKEN_1") or ""
+            if not token:
+                raise Exception("Configure DISCORD_TOKEN nas variáveis de ambiente do Fly.io")
+            
+            log("🤖 Fly.io: Modo single bot (recomendado)")
+            log("💡 Para múltiplos bots, crie múltiplos apps no Fly.io")
+            await bot.start(token, reconnect=True)
 
         asyncio.run(run_flyio())
 
     elif IS_RAILWAY:
-        log("Iniciando bots no Railway com servidor HTTP...")
+        log("Iniciando bot no Railway com servidor HTTP...")
 
         async def run_all():
             # Iniciar servidor web primeiro
             await start_web_server()
             await asyncio.sleep(1)
-            # Iniciar múltiplos bots
-            await run_multiple_bots()
+            
+            # No Railway, usar apenas 1 bot por deployment
+            token = os.getenv("DISCORD_TOKEN") or os.getenv("DISCORD_TOKEN_1") or ""
+            if not token:
+                raise Exception("Configure DISCORD_TOKEN nas variáveis de ambiente")
+            
+            log("🤖 Railway: Modo single bot")
+            await bot.start(token, reconnect=True)
 
         asyncio.run(run_all())
     else:
-        log("Iniciando bots no Replit/Local...")
-        # No Replit/Local, rodar múltiplos bots
-        asyncio.run(run_multiple_bots())
+        log("Iniciando bots no Replit/Local com servidor HTTP...")
+        
+        async def run_replit():
+            # Iniciar servidor web primeiro
+            await start_web_server()
+            await asyncio.sleep(1)
+            # No Replit, pode rodar múltiplos bots se necessário
+            await run_multiple_bots()
+        
+        asyncio.run(run_replit())
 
 except discord.HTTPException as e:
     if e.status == 429:
