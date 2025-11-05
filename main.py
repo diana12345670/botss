@@ -1436,11 +1436,33 @@ async def run_bot_with_webserver():
         raise
 
 
-def create_bot_instance():
+def create_bot_instance(bot_number: int):
     """Cria uma nova instância do bot com todos os comandos e eventos"""
+    # Configuração de intents
+    bot_intents = discord.Intents(
+        guilds=True,
+        guild_messages=True,
+        members=True,
+        message_content=True
+    )
+    bot_intents.presences = False
+    bot_intents.typing = False
+    bot_intents.voice_states = False
+    bot_intents.integrations = False
+    bot_intents.webhooks = False
+    bot_intents.invites = False
+    bot_intents.emojis_and_stickers = False
+    bot_intents.bans = False
+    bot_intents.dm_messages = False
+    bot_intents.dm_reactions = False
+    bot_intents.dm_typing = False
+    bot_intents.guild_reactions = False
+    bot_intents.guild_typing = False
+    bot_intents.moderation = False
+
     new_bot = commands.Bot(
         command_prefix="!",
-        intents=intents,
+        intents=bot_intents,
         chunk_guilds_at_startup=False,
         member_cache_flags=discord.MemberCacheFlags.none(),
         max_messages=10
@@ -1450,19 +1472,19 @@ def create_bot_instance():
     async def cleanup_for_this_bot():
         """Tarefa em background que remove jogadores que ficaram muito tempo na fila"""
         await new_bot.wait_until_ready()
-        log(f"🧹 Iniciando sistema de limpeza automática de filas para {new_bot.user.name}")
+        log(f"🧹 Iniciando sistema de limpeza automática de filas para Bot #{bot_number}")
 
         while not new_bot.is_closed():
             try:
                 expired_players = db.get_expired_queue_players(timeout_minutes=5)
 
                 if expired_players:
-                    log(f"🧹 [{new_bot.user.name}] Encontrados jogadores expirados em {len(expired_players)} filas")
+                    log(f"🧹 [Bot #{bot_number}] Encontrados jogadores expirados em {len(expired_players)} filas")
 
                     for queue_id, user_ids in expired_players.items():
                         for user_id in user_ids:
                             db.remove_from_queue(queue_id, user_id)
-                            log(f"⏱️ [{new_bot.user.name}] Removido usuário {user_id} da fila {queue_id} (timeout)")
+                            log(f"⏱️ [Bot #{bot_number}] Removido usuário {user_id} da fila {queue_id} (timeout)")
 
                         if queue_id in queue_messages:
                             channel_id, message_id, mode, bet_value = queue_messages[queue_id]
@@ -1490,26 +1512,32 @@ def create_bot_instance():
                 await asyncio.sleep(60)
 
             except Exception as e:
-                log(f"Erro na limpeza de filas [{new_bot.user.name}]: {e}")
+                log(f"Erro na limpeza de filas [Bot #{bot_number}]: {e}")
                 await asyncio.sleep(60)
 
     # Registrar evento on_ready
     @new_bot.event
     async def on_ready():
-        print(f'Bot conectado como {new_bot.user}')
-        print(f'Nome: {new_bot.user.name}')
-        print(f'ID: {new_bot.user.id}')
+        log("=" * 50)
+        log(f"✅ BOT #{bot_number} CONECTADO AO DISCORD!")
+        log("=" * 50)
+        log(f'👤 Usuário: {new_bot.user}')
+        log(f'📛 Nome: {new_bot.user.name}')
+        log(f'🆔 ID: {new_bot.user.id}')
+        log(f'🌐 Servidores: {len(new_bot.guilds)}')
+        
         try:
+            log(f"🔄 Sincronizando comandos do Bot #{bot_number}...")
             synced = await new_bot.tree.sync()
-            print(f'{len(synced)} comandos sincronizados')
+            log(f'✅ Bot #{bot_number}: {len(synced)} comandos sincronizados')
         except Exception as e:
-            print(f'Erro ao sincronizar comandos: {e}')
+            log(f'⚠️ Erro ao sincronizar comandos do Bot #{bot_number}: {e}')
 
         # Registrar views persistentes
-        log('📋 Registrando views persistentes...')
+        log(f'📋 Registrando views persistentes para Bot #{bot_number}...')
         new_bot.add_view(QueueButton(mode="", bet_value=0, mediator_fee=0))
         new_bot.add_view(ConfirmPaymentButton(bet_id=""))
-        log('✅ Views persistentes registradas')
+        log(f'✅ Views persistentes registradas para Bot #{bot_number}')
 
         # Inicia a tarefa de limpeza automática de filas para ESTE bot
         new_bot.loop.create_task(cleanup_for_this_bot())
@@ -1530,7 +1558,7 @@ async def run_bot_single():
     await bot.start(token, reconnect=True)
 
 async def run_multiple_bots():
-    """Roda múltiplos bots simultaneamente com tokens diferentes (usa mais recursos)"""
+    """Roda múltiplos bots simultaneamente com tokens diferentes na MESMA máquina"""
     # Pegar os 3 tokens do ambiente
     token1 = os.getenv("DISCORD_TOKEN_1") or os.getenv("DISCORD_TOKEN") or ""
     token2 = os.getenv("DISCORD_TOKEN_2") or ""
@@ -1552,17 +1580,27 @@ async def run_multiple_bots():
         log(f"  {i}. DISCORD_TOKEN_{i}: {token[:20]}...{token[-10:]}")
     
     if len(tokens) > 1:
-        log("⚠️ AVISO: Múltiplos bots consomem mais memória. Use apenas se necessário.")
+        log("💡 Múltiplos bots rodando na MESMA máquina (Fly.io)")
 
     # Criar uma instância de bot para cada token
+    bot_instances = []
     tasks = []
 
     for i, token in enumerate(tokens, 1):
-        new_bot = create_bot_instance()
         log(f"🚀 Iniciando bot #{i}...")
-        tasks.append(new_bot.start(token, reconnect=True))
+        new_bot = create_bot_instance(bot_number=i)
+        bot_instances.append(new_bot)
+        
+        # Cria task de inicialização do bot
+        task = asyncio.create_task(new_bot.start(token, reconnect=True))
+        tasks.append(task)
+        
+        # Pequeno delay entre inicializações para evitar rate limit
+        if i < len(tokens):
+            await asyncio.sleep(2)
 
-    # Rodar todos os bots simultaneamente
+    # Rodar todos os bots simultaneamente até todos terminarem
+    log(f"✅ Todos os {len(tokens)} bots foram iniciados e rodam na mesma máquina")
     await asyncio.gather(*tasks, return_exceptions=True)
 
 try:
