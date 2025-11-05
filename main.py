@@ -9,7 +9,6 @@ from datetime import datetime
 from models.bet import Bet
 from utils.database import Database
 from aiohttp import web
-import asyncio
 
 # Função para logging com flush automático (necessário para Fly.io)
 def log(message):
@@ -17,6 +16,7 @@ def log(message):
 
 # Lock global para evitar race conditions na criação de apostas
 queue_locks = {}
+# Note: queue_locks_creation_lock será criado no loop de eventos
 
 # Detectar ambiente de execução
 IS_FLYIO = os.getenv("FLY_APP_NAME") is not None
@@ -402,8 +402,10 @@ class PixModal(discord.ui.Modal, title='Inserir Chave PIX'):
         try:
             original_message = await interaction.channel.fetch_message(interaction.message.id)
             await original_message.edit(view=None)
-        except:
-            pass
+        except discord.NotFound:
+            log("Mensagem original não encontrada (já deletada)")
+        except Exception as e:
+            log(f"Erro ao remover botões da mensagem original: {e}")
 
         # Busca o tópico (thread) da aposta
         thread = interaction.guild.get_thread(bet.channel_id)
@@ -411,8 +413,10 @@ class PixModal(discord.ui.Modal, title='Inserir Chave PIX'):
             # Tenta buscar threads arquivados
             try:
                 thread = await interaction.guild.fetch_channel(bet.channel_id)
-            except:
-                pass
+            except discord.NotFound:
+                log(f"Thread {bet.channel_id} não encontrado (já deletado)")
+            except Exception as e:
+                log(f"Erro ao buscar thread: {e}")
         
         if thread:
             # Adiciona o mediador ao tópico
@@ -553,7 +557,10 @@ async def cleanup_expired_queues():
                             try:
                                 message_id = int(parts[-1])
                                 db.delete_queue_metadata(message_id)
-                                log(f"🧹 Metadata removido para fila vazia {queue_id}")
+                                # Limpa do dicionário em memória (previne memory leak)
+                                if queue_id in queue_messages:
+                                    del queue_messages[queue_id]
+                                log(f"🧹 Metadata e memória limpos para fila vazia {queue_id}")
                             except ValueError:
                                 pass
 
@@ -572,25 +579,9 @@ async def cleanup_expired_queues():
                                     team1_queue = db.get_queue(f"{queue_id}_team1")
                                     team2_queue = db.get_queue(f"{queue_id}_team2")
 
-                                    guild = channel.guild
-                                    team1_names = []
-                                    for uid in team1_queue:
-                                        try:
-                                            member = await guild.fetch_member(uid)
-                                            team1_names.append(member.mention)
-                                        except:
-                                            team1_names.append(f"<@{uid}>")
-
-                                    team2_names = []
-                                    for uid in team2_queue:
-                                        try:
-                                            member = await guild.fetch_member(uid)
-                                            team2_names.append(member.mention)
-                                        except:
-                                            team2_names.append(f"<@{uid}>")
-
-                                    team1_text = "\n".join(team1_names) if team1_names else "Nenhum jogador"
-                                    team2_text = "\n".join(team2_names) if team2_names else "Nenhum jogador"
+                                    # Usa menções diretas (economiza API calls)
+                                    team1_text = "\n".join([f"<@{uid}>" for uid in team1_queue]) if team1_queue else "Nenhum jogador"
+                                    team2_text = "\n".join([f"<@{uid}>" for uid in team2_queue]) if team2_queue else "Nenhum jogador"
 
                                     embed = discord.Embed(
                                         title=mode.replace('-', ' ').title(),
@@ -599,21 +590,13 @@ async def cleanup_expired_queues():
                                     embed.add_field(name="Valor", value=f"R$ {bet_value:.2f}".replace('.', ','), inline=True)
                                     embed.add_field(name="Time 1", value=team1_text, inline=True)
                                     embed.add_field(name="Time 2", value=team2_text, inline=True)
-                                    if guild.icon:
-                                        embed.set_thumbnail(url=guild.icon.url)
+                                    if channel.guild and channel.guild.icon:
+                                        embed.set_thumbnail(url=channel.guild.icon.url)
                                 else:
                                     queue = db.get_queue(queue_id)
 
-                                    guild = channel.guild
-                                    player_names = []
-                                    for uid in queue:
-                                        try:
-                                            member = await guild.fetch_member(uid)
-                                            player_names.append(member.mention)
-                                        except:
-                                            player_names.append(f"<@{uid}>")
-
-                                    players_text = "\n".join(player_names) if player_names else "Vazio"
+                                    # Usa menções diretas (economiza API calls)
+                                    players_text = "\n".join([f"<@{uid}>" for uid in queue]) if queue else "Vazio"
 
                                     embed = discord.Embed(
                                         title=mode.replace('-', ' ').title(),
@@ -621,8 +604,8 @@ async def cleanup_expired_queues():
                                     )
                                     embed.add_field(name="Valor", value=f"R$ {bet_value:.2f}".replace('.', ','), inline=True)
                                     embed.add_field(name="Fila", value=players_text, inline=True)
-                                    if guild.icon:
-                                        embed.set_thumbnail(url=guild.icon.url)
+                                    if channel.guild and channel.guild.icon:
+                                        embed.set_thumbnail(url=channel.guild.icon.url)
 
                                 await message.edit(embed=embed)
                         except Exception as e:
@@ -968,8 +951,10 @@ async def finalizar_aposta(interaction: discord.Interaction, vencedor: discord.M
         # Arquiva e bloqueia o tópico ao invés de deletar
         if isinstance(interaction.channel, discord.Thread):
             await interaction.channel.edit(archived=True, locked=True)
-    except:
-        pass
+    except discord.HTTPException as e:
+        log(f"Não foi possível arquivar thread (permissões ou thread já arquivado): {e.status}")
+    except Exception as e:
+        log(f"Erro ao arquivar thread: {e}")
 
 
 @bot.tree.command(name="cancelar-aposta", description="[MEDIADOR] Cancelar uma aposta em andamento")
@@ -1017,8 +1002,10 @@ async def cancelar_aposta(interaction: discord.Interaction):
         # Arquiva e bloqueia o tópico ao invés de deletar
         if isinstance(interaction.channel, discord.Thread):
             await interaction.channel.edit(archived=True, locked=True)
-    except:
-        pass
+    except discord.HTTPException as e:
+        log(f"Não foi possível arquivar thread (permissões ou thread já arquivado): {e.status}")
+    except Exception as e:
+        log(f"Erro ao arquivar thread: {e}")
 
 
 @bot.tree.command(name="historico", description="Ver o histórico de apostas")
@@ -1416,8 +1403,17 @@ def create_bot_instance():
     
     return new_bot
 
+async def run_bot_single():
+    """Roda um único bot (modo econômico)"""
+    token = os.getenv("DISCORD_TOKEN") or os.getenv("DISCORD_TOKEN_1") or ""
+    if not token:
+        raise Exception("Configure DISCORD_TOKEN nas variáveis de ambiente.")
+    
+    log("🤖 Modo econômico: Iniciando 1 bot...")
+    await bot.start(token, reconnect=True)
+
 async def run_multiple_bots():
-    """Roda múltiplos bots simultaneamente com tokens diferentes"""
+    """Roda múltiplos bots simultaneamente com tokens diferentes (usa mais recursos)"""
     # Pegar os 3 tokens do ambiente
     token1 = os.getenv("DISCORD_TOKEN_1") or os.getenv("DISCORD_TOKEN") or ""
     token2 = os.getenv("DISCORD_TOKEN_2") or ""
@@ -1426,14 +1422,21 @@ async def run_multiple_bots():
     tokens = [t for t in [token1, token2, token3] if t]
     
     if not tokens:
-        raise Exception("Configure pelo menos DISCORD_TOKEN_1 nas variáveis de ambiente.")
+        raise Exception("Configure pelo menos DISCORD_TOKEN nas variáveis de ambiente.")
     
     # Limita a 3 bots para economizar recursos
     if len(tokens) > 3:
         log("⚠️ AVISO: Mais de 3 tokens configurados. Limitando a 3 bots para economizar recursos.")
         tokens = tokens[:3]
     
-    log(f"🤖 Iniciando {len(tokens)} bot(s)...")
+    # Se há apenas 1 token, usa modo econômico
+    if len(tokens) == 1:
+        log("💡 Apenas 1 token detectado - usando modo econômico (menos memória)")
+        await run_bot_single()
+        return
+    
+    log(f"🤖 Modo múltiplos bots: Iniciando {len(tokens)} bots...")
+    log("⚠️ AVISO: Múltiplos bots consomem mais memória. Use apenas se necessário.")
     
     # Criar uma instância de bot para cada token
     tasks = []
