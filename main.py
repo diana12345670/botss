@@ -1431,21 +1431,16 @@ async def run_multiple_bots():
     tokens = [t for t in [token1, token2, token3] if t]
 
     if not tokens:
-        raise Exception("Configure pelo menos DISCORD_TOKEN nas variáveis de ambiente.")
+        raise Exception("Configure pelo menos DISCORD_TOKEN_1 nas variáveis de ambiente.")
 
     # Limita a 3 bots para economizar recursos
     if len(tokens) > 3:
         log("⚠️ AVISO: Mais de 3 tokens configurados. Limitando a 3 bots para economizar recursos.")
         tokens = tokens[:3]
 
-    # Se há apenas 1 token, usa modo econômico
-    if len(tokens) == 1:
-        log("💡 Apenas 1 token detectado - usando modo econômico (menos memória)")
-        await run_bot_single()
-        return
-
-    log(f"🤖 Modo múltiplos bots: Iniciando {len(tokens)} bots...")
-    log("⚠️ AVISO: Múltiplos bots consomem mais memória. Use apenas se necessário.")
+    log(f"🤖 Modo múltiplos bots: Iniciando {len(tokens)} bot(s)...")
+    if len(tokens) > 1:
+        log("⚠️ AVISO: Múltiplos bots consomem mais memória. Use apenas se necessário.")
 
     # Criar uma instância de bot para cada token
     tasks = []
@@ -1466,7 +1461,8 @@ try:
             # Iniciar servidor web primeiro
             await start_web_server()
             await asyncio.sleep(1)
-            # No Fly.io, rodar múltiplos bots
+            # No Fly.io, rodar múltiplos bots (DISCORD_TOKEN_1 e DISCORD_TOKEN_2)
+            log("🤖 Fly.io: Modo múltiplos bots ativado (mesma máquina)")
             await run_multiple_bots()
 
         asyncio.run(run_flyio())
