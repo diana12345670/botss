@@ -39,7 +39,8 @@ def log(message):
 
 # Lock global para evitar race conditions na criação de apostas
 queue_locks = {}
-# Note: queue_locks_creation_lock será criado no loop de eventos
+# Lock para proteção na criação de novos locks
+queue_locks_creation_lock = None
 
 # Detectar ambiente de execução
 IS_FLYIO = os.getenv("FLY_APP_NAME") is not None
@@ -167,7 +168,19 @@ class QueueButton(discord.ui.View):
 
         # Busca metadados da fila do banco de dados
         log(f"🔍 Buscando metadados para mensagem {interaction.message.id}")
-        metadata = db.get_queue_metadata(interaction.message.id)
+        
+        try:
+            log(f"📊 Metadados disponíveis: {list(db.get_all_queue_metadata().keys())}")
+            metadata = db.get_queue_metadata(interaction.message.id)
+        except Exception as e:
+            log(f"❌ ERRO ao buscar metadados: {e}")
+            logger.exception("Stacktrace completo:")
+            await interaction.response.send_message(
+                "❌ Erro ao acessar dados da fila. Tente novamente em alguns segundos.",
+                ephemeral=True
+            )
+            return
+        
         if metadata:
             mode = metadata['mode']
             bet_value = metadata['bet_value']
@@ -192,8 +205,12 @@ class QueueButton(discord.ui.View):
             return
 
         # Adquire lock para esta fila para evitar race conditions
+        # Protege a criação do lock com um lock global
         if queue_id not in queue_locks:
-            queue_locks[queue_id] = asyncio.Lock()
+            async with queue_locks_creation_lock:
+                # Double-check após adquirir o lock
+                if queue_id not in queue_locks:
+                    queue_locks[queue_id] = asyncio.Lock()
 
         async with queue_locks[queue_id]:
             # Recarrega a fila dentro do lock
@@ -802,6 +819,12 @@ async def cleanup_expired_queues():
 
 @bot.event
 async def on_ready():
+    global queue_locks_creation_lock
+    
+    # Inicializa o lock global ANTES de qualquer outra coisa
+    if queue_locks_creation_lock is None:
+        queue_locks_creation_lock = asyncio.Lock()
+    
     log("=" * 50)
     log("✅ BOT CONECTADO AO DISCORD!")
     log("=" * 50)
@@ -927,20 +950,29 @@ async def mostrar_fila(interaction: discord.Interaction, modo: app_commands.Choi
         embed.set_thumbnail(url=interaction.guild.icon.url)
     embed.set_footer(text=CREATOR_FOOTER)
 
-    await interaction.response.send_message(embed=embed)
+    # Defer para evitar timeout
+    await interaction.response.defer()
 
-    # Pega a mensagem enviada para passar o ID para o botão
-    message = await interaction.original_response()
+    # Envia a mensagem primeiro
+    message = await interaction.followup.send(embed=embed, wait=True)
+    
+    log(f"📝 Mensagem da fila criada com ID: {message.id}")
+
+    # Cria o view COM o message_id correto
     view = QueueButton(mode, valor, taxa, message.id)
-
-    await message.edit(embed=embed, view=view)
-
-    # Salva os metadados da fila no banco de dados (para views persistentes)
-    db.save_queue_metadata(message.id, mode, valor, taxa, interaction.channel.id)
-
-    # Salva a informação da fila para o sistema de limpeza automática
+    
+    # Salva os metadados da fila no banco de dados ANTES de editar a mensagem
     queue_id = f"{mode}_{message.id}"
+    db.save_queue_metadata(message.id, mode, valor, taxa, interaction.channel.id)
+    log(f"💾 Metadados salvos: queue_id={queue_id}, bet_value={valor}, mediator_fee={taxa}")
+
+    # Salva a informação da fila em memória
     queue_messages[queue_id] = (interaction.channel.id, message.id, mode, valor)
+    log(f"📋 Fila registrada em memória: {queue_id}")
+
+    # Agora edita a mensagem com os botões
+    await message.edit(embed=embed, view=view)
+    log(f"✅ Fila criada e pronta para uso: {mode}")
 
 
 

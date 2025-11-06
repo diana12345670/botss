@@ -36,13 +36,51 @@ class Database:
 
     def _load_data(self) -> dict:
         """Carrega dados do arquivo"""
-        with open(self.data_file, 'r', encoding='utf-8') as f:
-            return json.load(f)
+        import logging
+        logger = logging.getLogger('bot')
+        
+        try:
+            with open(self.data_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                # Valida estrutura básica
+                if not isinstance(data, dict):
+                    logger.error(f"❌ Dados corrompidos (não é dict): {type(data)}")
+                    raise ValueError("Arquivo de dados corrompido")
+                return data
+        except json.JSONDecodeError as e:
+            logger.error(f"❌ Erro ao decodificar JSON: {e}")
+            logger.warning("🔄 Criando backup e reinicializando dados...")
+            # Faz backup do arquivo corrompido
+            import shutil
+            backup_path = f"{self.data_file}.corrupted.backup"
+            shutil.copy2(self.data_file, backup_path)
+            logger.info(f"💾 Backup salvo em: {backup_path}")
+            # Retorna dados vazios
+            return {'queues': {}, 'queue_timestamps': {}, 'queue_metadata': {}, 'active_bets': {}, 'bet_history': [], 'mediator_roles': {}}
+        except Exception as e:
+            logger.error(f"❌ Erro inesperado ao carregar dados: {e}")
+            raise
 
     def _save_data(self, data: dict):
         """Salva dados no arquivo"""
-        with open(self.data_file, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
+        import logging
+        logger = logging.getLogger('bot')
+        
+        try:
+            # Salva em arquivo temporário primeiro (atomic write)
+            temp_file = f"{self.data_file}.tmp"
+            with open(temp_file, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+            
+            # Se salvou com sucesso, substitui o arquivo original
+            import shutil
+            shutil.move(temp_file, self.data_file)
+        except Exception as e:
+            logger.error(f"❌ Erro ao salvar dados: {e}")
+            # Remove arquivo temporário se existir
+            if os.path.exists(temp_file):
+                os.remove(temp_file)
+            raise
 
     def add_to_queue(self, queue_id: str, user_id: int):
         """Adiciona um jogador à fila"""
@@ -248,6 +286,33 @@ class Database:
 
     def save_queue_metadata(self, message_id: int, mode: str, bet_value: float, mediator_fee: float, channel_id: int):
         """Salva metadados de uma fila (mode, bet_value, mediator_fee, channel_id)"""
+        import logging
+        logger = logging.getLogger('bot')
+        
+        # Validação de entrada
+        if not isinstance(message_id, int) or message_id <= 0:
+            logger.error(f"❌ message_id inválido: {message_id}")
+            raise ValueError(f"message_id deve ser um inteiro positivo, recebido: {message_id}")
+        
+        if not mode or not isinstance(mode, str):
+            logger.error(f"❌ mode inválido: {mode}")
+            raise ValueError(f"mode deve ser uma string não vazia, recebido: {mode}")
+        
+        try:
+            bet_value = float(bet_value)
+            mediator_fee = float(mediator_fee)
+        except (ValueError, TypeError) as e:
+            logger.error(f"❌ Valores inválidos: bet_value={bet_value}, mediator_fee={mediator_fee}")
+            raise ValueError(f"bet_value e mediator_fee devem ser numéricos: {e}")
+        
+        if bet_value <= 0:
+            logger.error(f"❌ bet_value deve ser positivo: {bet_value}")
+            raise ValueError(f"bet_value deve ser maior que zero, recebido: {bet_value}")
+        
+        if mediator_fee < 0:
+            logger.error(f"❌ mediator_fee deve ser não-negativo: {mediator_fee}")
+            raise ValueError(f"mediator_fee deve ser >= 0, recebido: {mediator_fee}")
+        
         data = self._load_data()
         if 'queue_metadata' not in data:
             data['queue_metadata'] = {}
@@ -256,11 +321,13 @@ class Database:
         data['queue_metadata'][str(message_id)] = {
             'queue_id': queue_id,
             'mode': mode,
-            'bet_value': float(bet_value),  # Força conversão float
-            'mediator_fee': float(mediator_fee),  # Força conversão float
-            'channel_id': channel_id,
-            'message_id': message_id
+            'bet_value': bet_value,
+            'mediator_fee': mediator_fee,
+            'channel_id': int(channel_id),
+            'message_id': int(message_id)
         }
+        
+        logger.info(f"✅ Metadados salvos: queue_id={queue_id}, bet_value={bet_value}, mediator_fee={mediator_fee}")
         self._save_data(data)
 
     def get_queue_metadata(self, message_id: int) -> Optional[dict]:
