@@ -158,13 +158,26 @@ class Database:
 
     def get_bet_by_channel(self, channel_id: int) -> Optional[Bet]:
         """Retorna uma aposta pelo ID do canal"""
+        import logging
+        logger = logging.getLogger('bot')
+        
         data = self._load_data()
-        for bet_data in data['active_bets'].values():
-            if bet_data['channel_id'] == channel_id:
+        logger.info(f"🔍 DB: Buscando aposta para channel_id={channel_id} (type={type(channel_id)})")
+        logger.info(f"📊 DB: {len(data['active_bets'])} apostas ativas no banco")
+        
+        for bet_id, bet_data in data['active_bets'].items():
+            stored_channel_id = bet_data.get('channel_id')
+            logger.info(f"  - Comparando: {stored_channel_id} (type={type(stored_channel_id)}) == {channel_id} (type={type(channel_id)})?")
+            
+            # Compara convertendo ambos para int (caso um seja string)
+            if int(stored_channel_id) == int(channel_id):
+                logger.info(f"✅ DB: Aposta encontrada! bet_id={bet_id}")
                 # Garante conversão float ao carregar
                 bet_data['bet_value'] = float(bet_data.get('bet_value', 0))
                 bet_data['mediator_fee'] = float(bet_data.get('mediator_fee', 0))
                 return Bet.from_dict(bet_data)
+        
+        logger.info(f"❌ DB: Nenhuma aposta encontrada para channel_id={channel_id}")
         return None
 
     def update_active_bet(self, bet: Bet):

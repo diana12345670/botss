@@ -1037,6 +1037,7 @@ async def create_bet_channel(guild: discord.Guild, mode: str, player1_id: int, p
         
         # Log final antes de criar o objeto Bet
         log(f"💰 Criando objeto Bet com valores: bet_value={bet_value} ({type(bet_value)}), mediator_fee={mediator_fee} ({type(mediator_fee)})")
+        log(f"🆔 Thread criado com ID: {thread.id} (type={type(thread.id)})")
         
         bet = Bet(
             bet_id=bet_id,
@@ -1050,7 +1051,11 @@ async def create_bet_channel(guild: discord.Guild, mode: str, player1_id: int, p
         )
         db.add_active_bet(bet)
         
-        log(f"✅ Bet criado e salvo no banco: bet_value={bet.bet_value}, mediator_fee={bet.mediator_fee}")
+        log(f"✅ Bet criado e salvo no banco:")
+        log(f"   - bet_id: {bet.bet_id}")
+        log(f"   - channel_id: {bet.channel_id}")
+        log(f"   - bet_value: {bet.bet_value}")
+        log(f"   - mediator_fee: {bet.mediator_fee}")
     except Exception as e:
         log(f"Erro ao criar tópico de aposta: {e}")
         db.add_to_queue(mode, player1_id)
@@ -1182,7 +1187,11 @@ async def confirmar_pagamento(interaction: discord.Interaction):
 @bot.tree.command(name="finalizar-aposta", description="[MEDIADOR] Finalizar a aposta e declarar vencedor")
 @app_commands.describe(vencedor="Mencione o jogador vencedor")
 async def finalizar_aposta(interaction: discord.Interaction, vencedor: discord.Member):
-    log(f"🔍 /finalizar-aposta chamado no canal {interaction.channel_id}")
+    log(f"🔍 /finalizar-aposta chamado")
+    log(f"   - Canal ID: {interaction.channel_id} (type={type(interaction.channel_id)})")
+    log(f"   - Canal: {interaction.channel}")
+    log(f"   - É Thread? {isinstance(interaction.channel, discord.Thread)}")
+    
     bet = db.get_bet_by_channel(interaction.channel_id)
 
     if not bet:
@@ -1191,7 +1200,7 @@ async def finalizar_aposta(interaction: discord.Interaction, vencedor: discord.M
         all_bets = db.get_all_active_bets()
         log(f"📊 Apostas ativas: {len(all_bets)}")
         for bet_id, active_bet in all_bets.items():
-            log(f"  - Bet {bet_id}: canal={active_bet.channel_id}")
+            log(f"  - Bet {bet_id}: canal={active_bet.channel_id} (type={type(active_bet.channel_id)})")
         
         await interaction.response.send_message(
             "❌ Este tópico não é uma aposta ativa.\n"
@@ -1255,11 +1264,19 @@ async def finalizar_aposta(interaction: discord.Interaction, vencedor: discord.M
 
 @bot.tree.command(name="cancelar-aposta", description="[MEDIADOR] Cancelar uma aposta em andamento")
 async def cancelar_aposta(interaction: discord.Interaction):
-    log(f"🔍 /cancelar-aposta chamado no canal {interaction.channel_id}")
+    log(f"🔍 /cancelar-aposta chamado")
+    log(f"   - Canal ID: {interaction.channel_id} (type={type(interaction.channel_id)})")
+    log(f"   - É Thread? {isinstance(interaction.channel, discord.Thread)}")
+    
     bet = db.get_bet_by_channel(interaction.channel_id)
 
     if not bet:
         log(f"❌ Aposta não encontrada para canal {interaction.channel_id}")
+        all_bets = db.get_all_active_bets()
+        log(f"📊 Apostas ativas: {len(all_bets)}")
+        for bet_id, active_bet in all_bets.items():
+            log(f"  - Bet {bet_id}: canal={active_bet.channel_id}")
+        
         await interaction.response.send_message(
             "❌ Este tópico não é uma aposta ativa.\n"
             "💡 Verifique se você está no tópico correto da aposta.",
