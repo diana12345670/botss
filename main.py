@@ -171,11 +171,15 @@ class QueueButton(discord.ui.View):
             bet_value = metadata['bet_value']
             mediator_fee = metadata['mediator_fee']
             queue_id = metadata['queue_id']
+            log(f"✅ Metadados encontrados para mensagem {interaction.message.id}: bet_value={bet_value}, mediator_fee={mediator_fee}")
         else:
-            mode = self.mode
-            bet_value = self.bet_value
-            mediator_fee = self.mediator_fee
-            queue_id = self.queue_id
+            # CRÍTICO: Se não encontrou metadados, aborta (não usa valores zero!)
+            log(f"❌ ERRO CRÍTICO: Metadados não encontrados para mensagem {interaction.message.id}")
+            await interaction.response.send_message(
+                "❌ Erro: Esta fila não está mais disponível. Por favor, peça ao mediador para criar uma nova fila com /mostrar-fila.",
+                ephemeral=True
+            )
+            return
 
         if db.is_user_in_active_bet(user_id):
             await interaction.response.send_message(
@@ -349,14 +353,26 @@ class ConfirmPaymentButton(discord.ui.View):
 
     @discord.ui.button(label='Confirmar Pagamento', style=discord.ButtonStyle.green, emoji='💰', custom_id='persistent:confirm_payment')
     async def confirm_payment_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        log(f"🔍 Botão 'Confirmar Pagamento' clicado - bet_id={self.bet_id}")
         bet = db.get_active_bet(self.bet_id)
 
         if not bet:
-            await interaction.response.send_message(
-                "Esta aposta não foi encontrada.",
-                ephemeral=True
-            )
-            return
+            log(f"❌ Aposta não encontrada: bet_id={self.bet_id}")
+            # Tenta buscar pelo canal como fallback
+            bet = db.get_bet_by_channel(interaction.channel_id)
+            if bet:
+                log(f"✅ Aposta encontrada pelo canal: {bet.bet_id}")
+                self.bet_id = bet.bet_id
+            else:
+                log(f"❌ Aposta não encontrada nem por bet_id nem por channel_id")
+                await interaction.response.send_message(
+                    "❌ Esta aposta não foi encontrada.\n"
+                    "💡 Use o comando /confirmar-pagamento dentro do tópico da aposta.",
+                    ephemeral=True
+                )
+                return
+        else:
+            log(f"✅ Aposta encontrada: {bet.bet_id}")
 
         if bet.mediator_id == 0:
             await interaction.response.send_message(
@@ -506,13 +522,28 @@ class AcceptMediationButton(discord.ui.View):
 
     @discord.ui.button(label='Aceitar Mediação', style=discord.ButtonStyle.green, custom_id='persistent:accept_mediation')
     async def accept_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        log(f"🔍 Botão 'Aceitar Mediação' clicado - bet_id={self.bet_id}")
         bet = db.get_active_bet(self.bet_id)
 
         if not bet:
-            await interaction.response.send_message("Aposta não encontrada.", ephemeral=True)
-            return
+            log(f"❌ Aposta não encontrada: bet_id={self.bet_id}")
+            # Tenta buscar pelo canal como fallback
+            bet = db.get_bet_by_channel(interaction.channel_id)
+            if bet:
+                log(f"✅ Aposta encontrada pelo canal: {bet.bet_id}")
+                self.bet_id = bet.bet_id
+            else:
+                log(f"❌ Aposta não encontrada nem por bet_id nem por channel_id")
+                await interaction.response.send_message(
+                    "❌ Esta aposta não foi encontrada.",
+                    ephemeral=True
+                )
+                return
+        else:
+            log(f"✅ Aposta encontrada: {bet.bet_id}")
 
         if bet.mediator_id != 0:
+            log(f"⚠️ Aposta já tem mediador: {bet.mediator_id}")
             await interaction.response.send_message("Esta aposta já tem um mediador.", ephemeral=True)
             return
 
@@ -806,7 +837,12 @@ async def mostrar_fila(interaction: discord.Interaction, modo: app_commands.Choi
 
 
 async def create_bet_channel(guild: discord.Guild, mode: str, player1_id: int, player2_id: int, bet_value: float, mediator_fee: float, source_channel_id: int = None):
-    log(f"🔧 create_bet_channel chamada: mode={mode}, player1={player1_id}, player2={player2_id}")
+    log(f"🔧 create_bet_channel chamada: mode={mode}, player1={player1_id}, player2={player2_id}, bet_value={bet_value}, mediator_fee={mediator_fee}")
+    
+    # VALIDAÇÃO CRÍTICA: Nunca permitir valores zero
+    if bet_value <= 0 or mediator_fee < 0:
+        log(f"❌ ERRO CRÍTICO: Valores inválidos - bet_value={bet_value}, mediator_fee={mediator_fee}. Abortando criação.")
+        return
     
     # Validação dupla com lock para evitar race condition
     if db.is_user_in_active_bet(player1_id) or db.is_user_in_active_bet(player2_id):
@@ -948,14 +984,19 @@ async def create_bet_channel(guild: discord.Guild, mode: str, player1_id: int, p
 
 @bot.tree.command(name="confirmar-pagamento", description="Confirmar que você enviou o pagamento ao mediador")
 async def confirmar_pagamento(interaction: discord.Interaction):
+    log(f"🔍 /confirmar-pagamento chamado no canal {interaction.channel_id} por usuário {interaction.user.id}")
     bet = db.get_bet_by_channel(interaction.channel_id)
 
     if not bet:
+        log(f"❌ Aposta não encontrada para canal {interaction.channel_id}")
         await interaction.response.send_message(
-            "Este canal não é uma aposta ativa.",
+            "❌ Este canal não é uma aposta ativa.\n"
+            "💡 Use este comando dentro do tópico da aposta.",
             ephemeral=True
         )
         return
+    
+    log(f"✅ Aposta encontrada: {bet.bet_id}")
 
     if bet.mediator_id == 0:
         await interaction.response.send_message(
@@ -1030,14 +1071,25 @@ async def confirmar_pagamento(interaction: discord.Interaction):
 @bot.tree.command(name="finalizar-aposta", description="[MEDIADOR] Finalizar a aposta e declarar vencedor")
 @app_commands.describe(vencedor="Mencione o jogador vencedor")
 async def finalizar_aposta(interaction: discord.Interaction, vencedor: discord.Member):
+    log(f"🔍 /finalizar-aposta chamado no canal {interaction.channel_id}")
     bet = db.get_bet_by_channel(interaction.channel_id)
 
     if not bet:
+        log(f"❌ Aposta não encontrada para canal {interaction.channel_id}")
+        # Lista todas as apostas ativas para debug
+        all_bets = db.get_all_active_bets()
+        log(f"📊 Apostas ativas: {len(all_bets)}")
+        for bet_id, active_bet in all_bets.items():
+            log(f"  - Bet {bet_id}: canal={active_bet.channel_id}")
+        
         await interaction.response.send_message(
-            "Este tópico não é uma aposta ativa.",
+            "❌ Este tópico não é uma aposta ativa.\n"
+            "💡 Verifique se você está no tópico correto da aposta.",
             ephemeral=True
         )
         return
+    
+    log(f"✅ Aposta encontrada: {bet.bet_id}")
 
     # Verifica se é o mediador da aposta OU se tem o cargo de mediador
     mediator_role_id = db.get_mediator_role(interaction.guild.id)
@@ -1092,14 +1144,19 @@ async def finalizar_aposta(interaction: discord.Interaction, vencedor: discord.M
 
 @bot.tree.command(name="cancelar-aposta", description="[MEDIADOR] Cancelar uma aposta em andamento")
 async def cancelar_aposta(interaction: discord.Interaction):
+    log(f"🔍 /cancelar-aposta chamado no canal {interaction.channel_id}")
     bet = db.get_bet_by_channel(interaction.channel_id)
 
     if not bet:
+        log(f"❌ Aposta não encontrada para canal {interaction.channel_id}")
         await interaction.response.send_message(
-            "Este tópico não é uma aposta ativa.",
+            "❌ Este tópico não é uma aposta ativa.\n"
+            "💡 Verifique se você está no tópico correto da aposta.",
             ephemeral=True
         )
         return
+    
+    log(f"✅ Aposta encontrada: {bet.bet_id}")
 
     # Verifica se é o mediador da aposta OU se tem o cargo de mediador
     mediator_role_id = db.get_mediator_role(interaction.guild.id)
