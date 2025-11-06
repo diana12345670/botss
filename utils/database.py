@@ -21,6 +21,11 @@ class Database:
 
         self.data_file = os.path.join(self.data_dir, "bets.json")
 
+        # Log do caminho do arquivo para debug
+        import logging
+        logger = logging.getLogger('bot')
+        logger.info(f"📁 Banco de dados: {self.data_file}")
+
         self._ensure_file_exists()
 
     def _ensure_file_exists(self):
@@ -41,6 +46,9 @@ class Database:
 
     def add_to_queue(self, queue_id: str, user_id: int):
         """Adiciona um jogador à fila"""
+        import logging
+        logger = logging.getLogger('bot')
+        
         data = self._load_data()
         
         # Inicializa estruturas se não existirem
@@ -51,6 +59,7 @@ class Database:
         
         if queue_id not in data['queues']:
             data['queues'][queue_id] = []
+            logger.info(f"🆕 Nova fila criada: {queue_id}")
         if queue_id not in data['queue_timestamps']:
             data['queue_timestamps'][queue_id] = {}
 
@@ -61,20 +70,31 @@ class Database:
                 oldest_user = data['queues'][queue_id].pop(0)
                 if str(oldest_user) in data['queue_timestamps'][queue_id]:
                     del data['queue_timestamps'][queue_id][str(oldest_user)]
+                logger.info(f"🧹 Removido jogador mais antigo {oldest_user} da fila {queue_id}")
             
             data['queues'][queue_id].append(user_id)
             # Armazena o timestamp quando o jogador entra na fila
             data['queue_timestamps'][queue_id][str(user_id)] = datetime.now().isoformat()
+            logger.info(f"💾 DB: Usuário {user_id} adicionado à fila {queue_id}")
+        else:
+            logger.info(f"⚠️ DB: Usuário {user_id} já estava na fila {queue_id}")
         
         self._save_data(data)
 
     def remove_from_queue(self, queue_id: str, user_id: int):
         """Remove um jogador da fila"""
+        import logging
+        logger = logging.getLogger('bot')
+        
         data = self._load_data()
 
         # Remove da fila
         if queue_id in data['queues'] and user_id in data['queues'][queue_id]:
             data['queues'][queue_id].remove(user_id)
+            logger.info(f"💾 DB: Usuário {user_id} removido da fila {queue_id}")
+        else:
+            logger.info(f"⚠️ DB: Tentativa de remover {user_id} da fila {queue_id}, mas não estava lá")
+            logger.info(f"📊 DB: Fila atual {queue_id}: {data['queues'].get(queue_id, [])}")
 
         # Garante que queue_timestamps existe
         if 'queue_timestamps' not in data:
@@ -85,6 +105,7 @@ class Database:
             user_id_str = str(user_id)
             if user_id_str in data['queue_timestamps'][queue_id]:
                 del data['queue_timestamps'][queue_id][user_id_str]
+                logger.info(f"⏱️ DB: Timestamp removido para {user_id} na fila {queue_id}")
 
         self._save_data(data)
 
@@ -235,6 +256,13 @@ class Database:
         if 'queue_metadata' not in data:
             return None
         return data['queue_metadata'].get(str(message_id))
+
+    def get_all_queue_metadata(self) -> dict:
+        """Retorna todos os metadados de filas"""
+        data = self._load_data()
+        if 'queue_metadata' not in data:
+            return {}
+        return data['queue_metadata']
 
     def delete_queue_metadata(self, message_id: int):
         """Remove metadados de uma fila"""

@@ -163,18 +163,21 @@ class QueueButton(discord.ui.View):
     @discord.ui.button(label='Entrar na Fila', style=discord.ButtonStyle.blurple, row=0, custom_id='persistent:join_queue')
     async def join_queue_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         user_id = interaction.user.id
+        log(f"👆 Usuário {user_id} clicou em 'Entrar na Fila' (mensagem {interaction.message.id})")
 
         # Busca metadados da fila do banco de dados
+        log(f"🔍 Buscando metadados para mensagem {interaction.message.id}")
         metadata = db.get_queue_metadata(interaction.message.id)
         if metadata:
             mode = metadata['mode']
             bet_value = metadata['bet_value']
             mediator_fee = metadata['mediator_fee']
             queue_id = metadata['queue_id']
-            log(f"✅ Metadados encontrados para mensagem {interaction.message.id}: bet_value={bet_value}, mediator_fee={mediator_fee}")
+            log(f"✅ Metadados encontrados: queue_id={queue_id}, bet_value={bet_value}, mediator_fee={mediator_fee}")
         else:
             # CRÍTICO: Se não encontrou metadados, aborta (não usa valores zero!)
-            log(f"❌ ERRO CRÍTICO: Metadados não encontrados para mensagem {interaction.message.id}")
+            log(f"❌ ERRO: Metadados não encontrados para mensagem {interaction.message.id}")
+            log(f"📋 Metadados disponíveis no banco: {list(db.get_all_queue_metadata().keys())}")
             await interaction.response.send_message(
                 "❌ Erro: Esta fila não está mais disponível. Por favor, peça ao mediador para criar uma nova fila com /mostrar-fila.",
                 ephemeral=True
@@ -195,8 +198,10 @@ class QueueButton(discord.ui.View):
         async with queue_locks[queue_id]:
             # Recarrega a fila dentro do lock
             queue = db.get_queue(queue_id)
+            log(f"📊 Fila {queue_id} antes de adicionar: {queue}")
 
             if user_id in queue:
+                log(f"⚠️ Usuário {user_id} já está na fila {queue_id}")
                 await interaction.response.send_message(
                     "Você já está nesta fila.",
                     ephemeral=True
@@ -204,8 +209,10 @@ class QueueButton(discord.ui.View):
                 return
 
             # Adiciona à fila
+            log(f"➕ Adicionando usuário {user_id} à fila {queue_id}")
             db.add_to_queue(queue_id, user_id)
             queue = db.get_queue(queue_id)
+            log(f"📊 Fila {queue_id} após adicionar: {queue}")
 
         # Verifica se tem 2 jogadores para criar aposta
         if len(queue) >= 2:
@@ -247,13 +254,35 @@ class QueueButton(discord.ui.View):
                 db.remove_from_queue(queue_id, player2_id)
                 log(f"🗑️ Removidos {player1_id} e {player2_id} da fila {queue_id}")
 
-                # Atualiza a mensagem após remover os jogadores
+                # Atualiza a mensagem MANUALMENTE após remover os jogadores
                 try:
-                    guild_icon = interaction.guild.icon.url if interaction.guild.icon else None
-                    await self.update_queue_message(interaction.channel, guild_icon, interaction.message.id)
-                    log(f"✅ Mensagem da fila atualizada")
+                    # Recarrega a fila atualizada (sem os 2 jogadores)
+                    updated_queue = db.get_queue(queue_id)
+                    log(f"📊 Fila após remoção: {updated_queue}")
+                    
+                    message = await interaction.channel.fetch_message(interaction.message.id)
+                    
+                    # Monta a lista de jogadores restantes
+                    player_names = [f"<@{uid}>" for uid in updated_queue]
+                    players_text = "\n".join(player_names) if player_names else "Vazio"
+                    
+                    log(f"📝 Atualizando painel para: {players_text}")
+                    
+                    embed_update = discord.Embed(
+                        title=mode.replace('-', ' ').title(),
+                        color=EMBED_COLOR
+                    )
+                    embed_update.add_field(name="Valor", value=f"R$ {bet_value:.2f}".replace('.', ','), inline=True)
+                    embed_update.add_field(name="Fila", value=players_text, inline=True)
+                    if interaction.guild.icon:
+                        embed_update.set_thumbnail(url=interaction.guild.icon.url)
+                    embed_update.set_footer(text=CREATOR_FOOTER)
+                    
+                    await message.edit(embed=embed_update)
+                    log(f"✅ Painel atualizado - jogadores removidos visualmente")
                 except Exception as e:
-                    log(f"⚠️ Erro ao atualizar mensagem da fila: {e}")
+                    log(f"❌ Erro ao atualizar mensagem da fila: {e}")
+                    logger.exception("Stacktrace:")
 
                 # Passa o ID do canal atual para criar o tópico nele
                 log(f"🏗️ Iniciando criação do tópico com valores: bet_value={bet_value}, mediator_fee={mediator_fee}")
@@ -288,12 +317,18 @@ class QueueButton(discord.ui.View):
 
                 await interaction.response.send_message(embed=embed, ephemeral=True)
 
-                # Atualiza a mensagem principal
+                # Atualiza a mensagem principal com os nomes REAIS dos jogadores
                 try:
+                    # Recarrega a fila para garantir dados atualizados
+                    queue = db.get_queue(queue_id)
+                    log(f"📊 Atualizando painel - fila atual: {queue}")
+                    
                     message = await interaction.channel.fetch_message(interaction.message.id)
 
                     player_names = [f"<@{uid}>" for uid in queue]
                     players_text = "\n".join(player_names) if player_names else "Vazio"
+                    
+                    log(f"📝 Texto a ser exibido no painel: {players_text}")
 
                     embed_update = discord.Embed(
                         title=mode.replace('-', ' ').title(),
@@ -306,30 +341,42 @@ class QueueButton(discord.ui.View):
                     embed_update.set_footer(text=CREATOR_FOOTER)
 
                     await message.edit(embed=embed_update)
+                    log(f"✅ Painel atualizado com sucesso")
                 except Exception as e:
-                    log(f"Erro ao atualizar mensagem da fila: {e}")
+                    log(f"❌ Erro ao atualizar mensagem da fila: {e}")
+                    logger.exception("Stacktrace:")
 
     @discord.ui.button(label='Sair da Fila', style=discord.ButtonStyle.gray, row=0, custom_id='persistent:leave_queue')
     async def leave_queue_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         user_id = interaction.user.id
+        log(f"👆 Usuário {user_id} clicou em 'Sair da Fila' (mensagem {interaction.message.id})")
 
         # Busca metadados da fila do banco de dados
         metadata = db.get_queue_metadata(interaction.message.id)
         if metadata:
             queue_id = metadata['queue_id']
+            log(f"✅ Metadados encontrados: queue_id={queue_id}")
         else:
             queue_id = self.queue_id
+            log(f"⚠️ Metadados não encontrados, usando self.queue_id={queue_id}")
 
         queue = db.get_queue(queue_id)
+        log(f"📊 Fila {queue_id} atual: {queue}")
 
         if user_id not in queue:
+            log(f"⚠️ Usuário {user_id} NÃO está na fila {queue_id}")
             await interaction.response.send_message(
                 "Você não está nesta fila.",
                 ephemeral=True
             )
             return
 
+        log(f"➖ Removendo usuário {user_id} da fila {queue_id}")
         db.remove_from_queue(queue_id, user_id)
+        
+        # Verifica se foi removido
+        queue_after = db.get_queue(queue_id)
+        log(f"📊 Fila {queue_id} após remover: {queue_after}")
 
         embed = discord.Embed(
             title="❌ Saiu da fila",
@@ -341,9 +388,39 @@ class QueueButton(discord.ui.View):
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-        # Atualiza a mensagem principal
-        guild_icon = interaction.guild.icon.url if interaction.guild.icon else None
-        await self.update_queue_message(interaction.channel, guild_icon, interaction.message.id)
+        # Atualiza a mensagem principal com a fila atualizada
+        try:
+            metadata = db.get_queue_metadata(interaction.message.id)
+            if metadata:
+                mode = metadata['mode']
+                bet_value = metadata['bet_value']
+            else:
+                mode = self.mode
+                bet_value = self.bet_value
+            
+            message = await interaction.channel.fetch_message(interaction.message.id)
+            
+            # Lista atualizada de jogadores
+            player_names = [f"<@{uid}>" for uid in queue_after]
+            players_text = "\n".join(player_names) if player_names else "Vazio"
+            
+            log(f"📝 Atualizando painel após saída: {players_text}")
+            
+            embed_update = discord.Embed(
+                title=mode.replace('-', ' ').title(),
+                color=EMBED_COLOR
+            )
+            embed_update.add_field(name="Valor", value=f"R$ {bet_value:.2f}".replace('.', ','), inline=True)
+            embed_update.add_field(name="Fila", value=players_text, inline=True)
+            if interaction.guild.icon:
+                embed_update.set_thumbnail(url=interaction.guild.icon.url)
+            embed_update.set_footer(text=CREATOR_FOOTER)
+            
+            await message.edit(embed=embed_update)
+            log(f"✅ Painel atualizado após saída")
+        except Exception as e:
+            log(f"❌ Erro ao atualizar painel: {e}")
+            logger.exception("Stacktrace:")
 
 
 class ConfirmPaymentButton(discord.ui.View):
@@ -756,6 +833,40 @@ async def on_ready():
         log('✅ Views persistentes registradas')
     else:
         log('ℹ️ Views persistentes já estavam registradas')
+
+    # Recuperar metadados de filas existentes após restart
+    if not hasattr(bot, '_queue_metadata_recovered'):
+        log('🔄 Recuperando metadados de filas existentes...')
+        all_metadata = db.get_all_queue_metadata()
+        
+        # PASSO 1: Limpar jogadores que estão em apostas ativas das filas
+        active_bets = db.get_all_active_bets()
+        active_players = set()
+        for bet in active_bets.values():
+            active_players.add(bet.player1_id)
+            active_players.add(bet.player2_id)
+        
+        log(f'🧹 Limpando {len(active_players)} jogadores que estão em apostas ativas')
+        for player_id in active_players:
+            db.remove_from_all_queues(player_id)
+        
+        # PASSO 2: Recuperar metadados e popular queue_messages
+        for message_id_str, metadata in all_metadata.items():
+            queue_id = metadata['queue_id']
+            channel_id = metadata['channel_id']
+            message_id = metadata['message_id']
+            mode = metadata['mode']
+            bet_value = metadata['bet_value']
+            
+            # Restaura no dicionário em memória
+            queue_messages[queue_id] = (channel_id, message_id, mode, bet_value)
+            
+            # Log detalhado de cada fila recuperada
+            current_queue = db.get_queue(queue_id)
+            log(f'📋 Fila {queue_id}: {len(current_queue)} jogadores')
+        
+        log(f'✅ {len(all_metadata)} filas recuperadas e sincronizadas')
+        bot._queue_metadata_recovered = True
 
     # Inicia a tarefa de limpeza automática de filas (apenas uma vez)
     if not hasattr(bot, '_cleanup_task_started'):
