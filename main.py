@@ -39,8 +39,9 @@ def log(message):
 
 # Lock global para evitar race conditions na criação de apostas
 queue_locks = {}
-# Lock para proteção na criação de novos locks
-queue_locks_creation_lock = None
+# Lock para proteção na criação de novos locks - INICIALIZADO AQUI
+import asyncio as _asyncio_init
+queue_locks_creation_lock = _asyncio_init.Lock()
 
 # Detectar ambiente de execução
 IS_FLYIO = os.getenv("FLY_APP_NAME") is not None
@@ -166,6 +167,9 @@ class QueueButton(discord.ui.View):
         user_id = interaction.user.id
         log(f"👆 Usuário {user_id} clicou em 'Entrar na Fila' (mensagem {interaction.message.id})")
 
+        # DEFER IMEDIATAMENTE para evitar timeout de 3 segundos
+        await interaction.response.defer(ephemeral=True)
+
         # Busca metadados da fila do banco de dados
         log(f"🔍 Buscando metadados para mensagem {interaction.message.id}")
         
@@ -175,7 +179,7 @@ class QueueButton(discord.ui.View):
         except Exception as e:
             log(f"❌ ERRO ao buscar metadados: {e}")
             logger.exception("Stacktrace completo:")
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "❌ Erro ao acessar dados da fila. Tente novamente em alguns segundos.",
                 ephemeral=True
             )
@@ -191,14 +195,14 @@ class QueueButton(discord.ui.View):
             # CRÍTICO: Se não encontrou metadados, aborta (não usa valores zero!)
             log(f"❌ ERRO: Metadados não encontrados para mensagem {interaction.message.id}")
             log(f"📋 Metadados disponíveis no banco: {list(db.get_all_queue_metadata().keys())}")
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "❌ Erro: Esta fila não está mais disponível. Por favor, peça ao mediador para criar uma nova fila com /mostrar-fila.",
                 ephemeral=True
             )
             return
 
         if db.is_user_in_active_bet(user_id):
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "Você já está em uma aposta ativa. Finalize ela antes de entrar em outra fila.",
                 ephemeral=True
             )
@@ -219,7 +223,7 @@ class QueueButton(discord.ui.View):
 
             if user_id in queue:
                 log(f"⚠️ Usuário {user_id} já está na fila {queue_id}")
-                await interaction.response.send_message(
+                await interaction.followup.send(
                     "Você já está nesta fila.",
                     ephemeral=True
                 )
@@ -240,10 +244,6 @@ class QueueButton(discord.ui.View):
                 bet_value = float(bet_value)
                 mediator_fee = float(mediator_fee)
                 log(f"💰 Valores após conversão: bet_value={bet_value}, mediator_fee={mediator_fee}")
-                
-                # DEFER IMEDIATAMENTE para evitar timeout (3 segundos)
-                await interaction.response.defer(ephemeral=True)
-                log(f"⏳ Interação deferida (evita timeout)")
                 
                 player1_id = queue[0]
                 player2_id = queue[1]
@@ -332,7 +332,7 @@ class QueueButton(discord.ui.View):
                     embed.set_thumbnail(url=interaction.guild.icon.url)
                 embed.set_footer(text=CREATOR_FOOTER)
 
-                await interaction.response.send_message(embed=embed, ephemeral=True)
+                await interaction.followup.send(embed=embed, ephemeral=True)
 
                 # Atualiza a mensagem principal com os nomes REAIS dos jogadores
                 try:
@@ -819,12 +819,6 @@ async def cleanup_expired_queues():
 
 @bot.event
 async def on_ready():
-    global queue_locks_creation_lock
-    
-    # Inicializa o lock global ANTES de qualquer outra coisa
-    if queue_locks_creation_lock is None:
-        queue_locks_creation_lock = asyncio.Lock()
-    
     log("=" * 50)
     log("✅ BOT CONECTADO AO DISCORD!")
     log("=" * 50)
