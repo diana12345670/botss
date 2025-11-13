@@ -147,6 +147,19 @@ class Database:
 
         self._save_data(data)
 
+    def delete_queue_metadata(self, message_id: int):
+        """Remove metadados de uma fila (quando painel é deletado)"""
+        data = self._load_data()
+        
+        if 'queue_metadata' not in data:
+            return
+        
+        message_id_str = str(message_id)
+        if message_id_str in data['queue_metadata']:
+            del data['queue_metadata'][message_id_str]
+            self._save_data(data)
+            logger.info(f"🗑️ DB: Metadados da mensagem {message_id} removidos")
+    
     def get_queue(self, queue_id: str) -> List[int]:
         """Retorna a fila de um painel específico"""
         data = self._load_data()
@@ -284,8 +297,8 @@ class Database:
         data = self._load_data()
         return list(data['queues'].keys())
 
-    def save_queue_metadata(self, message_id: int, mode: str, bet_value: float, mediator_fee: float, channel_id: int):
-        """Salva metadados de uma fila (mode, bet_value, mediator_fee, channel_id)"""
+    def save_queue_metadata(self, message_id: int, mode: str, bet_value: float, mediator_fee: float, channel_id: int, currency_type: str = "sonhos"):
+        """Salva metadados de uma fila (mode, bet_value, mediator_fee, channel_id, currency_type)"""
         import logging
         logger = logging.getLogger('bot')
         
@@ -324,10 +337,11 @@ class Database:
             'bet_value': bet_value,
             'mediator_fee': mediator_fee,
             'channel_id': int(channel_id),
-            'message_id': int(message_id)
+            'message_id': int(message_id),
+            'currency_type': currency_type
         }
         
-        logger.info(f"✅ Metadados salvos: queue_id={queue_id}, bet_value={bet_value}, mediator_fee={mediator_fee}")
+        logger.info(f"✅ Metadados salvos: queue_id={queue_id}, bet_value={bet_value}, mediator_fee={mediator_fee}, currency={currency_type}")
         self._save_data(data)
 
     def get_queue_metadata(self, message_id: int) -> Optional[dict]:

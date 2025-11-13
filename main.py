@@ -87,7 +87,7 @@ bot = commands.Bot(
 )
 db = Database()
 
-MODES = ["1v1-misto", "1v1-mob", "2v2-misto", "2v2-mob"]
+MODES = ["1v1-misto", "1v1-mob", "1v1-moeda", "2v2-misto", "2v2-mob"]
 ACTIVE_BETS_CATEGORY = "💰 Apostas Ativas"
 EMBED_COLOR = 0x5865F2
 CREATOR_FOOTER = "Bot feito por SKplay. Todos os direitos reservados | Criador: <@1339336477661724674>"
@@ -95,19 +95,70 @@ CREATOR_FOOTER = "Bot feito por SKplay. Todos os direitos reservados | Criador: 
 # Dicionário para mapear queue_id -> (channel_id, message_id, mode, bet_value)
 queue_messages = {}
 
+# Função para formatar valores em sonhos com k, m, b
+def format_sonhos(value: float) -> str:
+    """
+    Formata valores monetários como sonhos com sufixos k/m/b
+    Exemplos:
+        500 -> 💭 500
+        1500 -> 💭 1.5k
+        999999 -> 💭 999.9k (não arredonda para 1000k)
+        1000000 -> 💭 1m
+        2500000000 -> 💭 2.5b
+    """
+    import math
+
+    if value >= 1_000_000_000:
+        # Bilhões (limita a 999.9b máximo neste tier)
+        num = value / 1_000_000_000
+        # Trunca para 1 casa decimal para evitar arredondamento cruzando threshold
+        num_truncated = math.floor(num * 10) / 10
+        if num_truncated >= 10:
+            formatted = f"{int(num_truncated)}b"
+        else:
+            formatted = f"{num_truncated:.1f}b".replace('.0b', 'b')
+        return f"💭 {formatted}"
+    elif value >= 1_000_000:
+        # Milhões (limita a 999.9m máximo neste tier)
+        num = value / 1_000_000
+        # Trunca para 1 casa decimal
+        num_truncated = math.floor(num * 10) / 10
+        if num_truncated >= 10:
+            formatted = f"{int(num_truncated)}m"
+        else:
+            formatted = f"{num_truncated:.1f}m".replace('.0m', 'm')
+        return f"💭 {formatted}"
+    elif value >= 1_000:
+        # Milhares (limita a 999.9k máximo neste tier)
+        num = value / 1_000
+        # Trunca para 1 casa decimal
+        num_truncated = math.floor(num * 10) / 10
+        if num_truncated >= 10:
+            formatted = f"{int(num_truncated)}k"
+        else:
+            formatted = f"{num_truncated:.1f}k".replace('.0k', 'k')
+        return f"💭 {formatted}"
+    else:
+        # Valores menores que 1000
+        if value == int(value):
+            return f"💭 {int(value)}"
+        else:
+            return f"💭 {value:.2f}".replace('.', ',')
+
 
 class QueueButton(discord.ui.View):
-    def __init__(self, mode: str, bet_value: float, mediator_fee: float, message_id: int = None):
+    def __init__(self, mode: str, bet_value: float, mediator_fee: float, message_id: int = None, currency_type: str = "sonhos"):
         super().__init__(timeout=None)
         self.mode = mode
         self.bet_value = bet_value
         self.mediator_fee = mediator_fee
         self.message_id = message_id
+        self.currency_type = currency_type
         self.queue_id = f"{mode}_{message_id}" if message_id else ""
 
     async def update_queue_message(self, channel, guild_icon_url=None, original_message_id=None):
         """Atualiza a mensagem da fila com os jogadores atuais
-        
+
         Args:
             channel: Canal onde a mensagem está
             guild_icon_url: URL do ícone do servidor (opcional)
@@ -121,6 +172,7 @@ class QueueButton(discord.ui.View):
                 bet_value = metadata['bet_value']
                 queue_id = metadata['queue_id']
                 message_id = metadata['message_id']
+                currency_type = metadata.get('currency_type', 'sonhos')
                 log(f"📋 Metadados recuperados do banco para mensagem {original_message_id}")
             else:
                 log(f"⚠️ update_queue_message: metadados não encontrados para mensagem {original_message_id}")
@@ -131,6 +183,7 @@ class QueueButton(discord.ui.View):
             bet_value = self.bet_value
             queue_id = self.queue_id
             message_id = self.message_id
+            currency_type = self.currency_type
 
         if not message_id:
             log("⚠️ update_queue_message: message_id não disponível")
@@ -139,25 +192,33 @@ class QueueButton(discord.ui.View):
         try:
             message = await channel.fetch_message(message_id)
             queue = db.get_queue(queue_id)
-            
+
             log(f"📊 Atualizando fila {queue_id}: {len(queue)} jogadores restantes")
 
             # Usa menções diretas (sem fetch - mais rápido e econômico)
             player_names = [f"<@{user_id}>" for user_id in queue]
             players_text = "\n".join(player_names) if player_names else "Nenhum jogador na fila"
 
-            embed = discord.Embed(
+            # Formata o valor baseado no tipo de moeda
+            if currency_type == "sonhos":
+                valor_formatado = format_sonhos(bet_value)
+                moeda_nome = "Sonhos"
+            else:
+                valor_formatado = f"R$ {bet_value:.2f}"
+                moeda_nome = "Reais"
+
+            embed_update = discord.Embed(
                 title=mode.replace('-', ' ').title(),
                 color=EMBED_COLOR
             )
-
-            embed.add_field(name="Valor", value=f"R$ {bet_value:.2f}".replace('.', ','), inline=True)
-            embed.add_field(name="Fila", value=players_text if players_text != "Nenhum jogador na fila" else "Vazio", inline=True)
+            embed_update.add_field(name="Valor", value=valor_formatado, inline=True)
+            embed_update.add_field(name="Moeda", value=moeda_nome, inline=True)
+            embed_update.add_field(name="Fila", value=players_text if players_text != "Nenhum jogador na fila" else "Vazio", inline=False)
             if guild_icon_url:
-                embed.set_thumbnail(url=guild_icon_url)
-            embed.set_footer(text=CREATOR_FOOTER)
+                embed_update.set_thumbnail(url=guild_icon_url)
+            embed_update.set_footer(text=CREATOR_FOOTER)
 
-            await message.edit(embed=embed)
+            await message.edit(embed=embed_update)
             log(f"✅ Mensagem da fila {queue_id} editada com sucesso")
         except Exception as e:
             log(f"❌ Erro ao atualizar mensagem da fila: {e}")
@@ -172,7 +233,7 @@ class QueueButton(discord.ui.View):
 
         # Busca metadados da fila do banco de dados
         log(f"🔍 Buscando metadados para mensagem {interaction.message.id}")
-        
+
         try:
             log(f"📊 Metadados disponíveis: {list(db.get_all_queue_metadata().keys())}")
             metadata = db.get_queue_metadata(interaction.message.id)
@@ -184,13 +245,14 @@ class QueueButton(discord.ui.View):
                 ephemeral=True
             )
             return
-        
+
         if metadata:
             mode = metadata['mode']
             bet_value = metadata['bet_value']
             mediator_fee = metadata['mediator_fee']
             queue_id = metadata['queue_id']
-            log(f"✅ Metadados encontrados: queue_id={queue_id}, bet_value={bet_value}, mediator_fee={mediator_fee}")
+            currency_type = metadata.get('currency_type', 'sonhos')
+            log(f"✅ Metadados encontrados: queue_id={queue_id}, bet_value={bet_value}, mediator_fee={mediator_fee}, currency={currency_type}")
         else:
             # CRÍTICO: Se não encontrou metadados, aborta (não usa valores zero!)
             log(f"❌ ERRO: Metadados não encontrados para mensagem {interaction.message.id}")
@@ -239,12 +301,12 @@ class QueueButton(discord.ui.View):
         if len(queue) >= 2:
                 log(f"🎯 2 jogadores encontrados na fila {queue_id}! Iniciando criação de aposta...")
                 log(f"💰 Valores antes de criar tópico: bet_value={bet_value} (type={type(bet_value)}), mediator_fee={mediator_fee} (type={type(mediator_fee)})")
-                
+
                 # Garante conversão para float
                 bet_value = float(bet_value)
                 mediator_fee = float(mediator_fee)
                 log(f"💰 Valores após conversão: bet_value={bet_value}, mediator_fee={mediator_fee}")
-                
+
                 player1_id = queue[0]
                 player2_id = queue[1]
 
@@ -259,7 +321,7 @@ class QueueButton(discord.ui.View):
                 if interaction.guild.icon:
                     embed.set_thumbnail(url=interaction.guild.icon.url)
                 embed.set_footer(text=CREATOR_FOOTER)
-                
+
                 try:
                     await interaction.followup.send(embed=embed, ephemeral=True)
                     log(f"✅ Mensagem de confirmação enviada")
@@ -276,25 +338,34 @@ class QueueButton(discord.ui.View):
                     # Recarrega a fila atualizada (sem os 2 jogadores)
                     updated_queue = db.get_queue(queue_id)
                     log(f"📊 Fila após remoção: {updated_queue}")
-                    
+
                     message = await interaction.channel.fetch_message(interaction.message.id)
-                    
+
                     # Monta a lista de jogadores restantes
                     player_names = [f"<@{uid}>" for uid in updated_queue]
                     players_text = "\n".join(player_names) if player_names else "Vazio"
-                    
+
                     log(f"📝 Atualizando painel para: {players_text}")
-                    
+
+                    # Formata valor baseado no tipo de moeda
+                    if currency_type == "sonhos":
+                        valor_formatado = format_sonhos(bet_value)
+                        moeda_nome = "Sonhos"
+                    else:
+                        valor_formatado = f"R$ {bet_value:.2f}"
+                        moeda_nome = "Reais"
+
                     embed_update = discord.Embed(
                         title=mode.replace('-', ' ').title(),
                         color=EMBED_COLOR
                     )
-                    embed_update.add_field(name="Valor", value=f"R$ {bet_value:.2f}".replace('.', ','), inline=True)
-                    embed_update.add_field(name="Fila", value=players_text, inline=True)
+                    embed_update.add_field(name="Valor", value=valor_formatado, inline=True)
+                    embed_update.add_field(name="Moeda", value=moeda_nome, inline=True)
+                    embed_update.add_field(name="Fila", value=players_text, inline=False)
                     if interaction.guild.icon:
                         embed_update.set_thumbnail(url=interaction.guild.icon.url)
                     embed_update.set_footer(text=CREATOR_FOOTER)
-                    
+
                     await message.edit(embed=embed_update)
                     log(f"✅ Painel atualizado - jogadores removidos visualmente")
                 except Exception as e:
@@ -309,12 +380,12 @@ class QueueButton(discord.ui.View):
                 except Exception as e:
                     log(f"❌ ERRO ao criar tópico: {e}")
                     logger.exception("Stacktrace completo:")
-                    
+
                     # Se falhou, retorna os jogadores para a fila
                     db.add_to_queue(queue_id, player1_id)
                     db.add_to_queue(queue_id, player2_id)
                     log(f"♻️ Jogadores retornados à fila após erro")
-                    
+
                     # Atualiza a mensagem novamente
                     try:
                         guild_icon = interaction.guild.icon.url if interaction.guild.icon else None
@@ -339,20 +410,29 @@ class QueueButton(discord.ui.View):
                     # Recarrega a fila para garantir dados atualizados
                     queue = db.get_queue(queue_id)
                     log(f"📊 Atualizando painel - fila atual: {queue}")
-                    
+
                     message = await interaction.channel.fetch_message(interaction.message.id)
 
                     player_names = [f"<@{uid}>" for uid in queue]
                     players_text = "\n".join(player_names) if player_names else "Vazio"
-                    
+
                     log(f"📝 Texto a ser exibido no painel: {players_text}")
+
+                    # Formata valor baseado no tipo de moeda
+                    if currency_type == "sonhos":
+                        valor_formatado = format_sonhos(bet_value)
+                        moeda_nome = "Sonhos"
+                    else:
+                        valor_formatado = f"R$ {bet_value:.2f}"
+                        moeda_nome = "Reais"
 
                     embed_update = discord.Embed(
                         title=mode.replace('-', ' ').title(),
                         color=EMBED_COLOR
                     )
-                    embed_update.add_field(name="Valor", value=f"R$ {bet_value:.2f}".replace('.', ','), inline=True)
-                    embed_update.add_field(name="Fila", value=players_text, inline=True)
+                    embed_update.add_field(name="Valor", value=valor_formatado, inline=True)
+                    embed_update.add_field(name="Moeda", value=moeda_nome, inline=True)
+                    embed_update.add_field(name="Fila", value=players_text, inline=False)
                     if interaction.guild.icon:
                         embed_update.set_thumbnail(url=interaction.guild.icon.url)
                     embed_update.set_footer(text=CREATOR_FOOTER)
@@ -390,7 +470,7 @@ class QueueButton(discord.ui.View):
 
         log(f"➖ Removendo usuário {user_id} da fila {queue_id}")
         db.remove_from_queue(queue_id, user_id)
-        
+
         # Verifica se foi removido
         queue_after = db.get_queue(queue_id)
         log(f"📊 Fila {queue_id} após remover: {queue_after}")
@@ -411,28 +491,39 @@ class QueueButton(discord.ui.View):
             if metadata:
                 mode = metadata['mode']
                 bet_value = metadata['bet_value']
+                currency_type = metadata.get('currency_type', 'sonhos')
             else:
                 mode = self.mode
                 bet_value = self.bet_value
-            
+                currency_type = self.currency_type
+
             message = await interaction.channel.fetch_message(interaction.message.id)
-            
+
             # Lista atualizada de jogadores
             player_names = [f"<@{uid}>" for uid in queue_after]
             players_text = "\n".join(player_names) if player_names else "Vazio"
-            
+
             log(f"📝 Atualizando painel após saída: {players_text}")
-            
+
+            # Formata valor baseado no tipo de moeda
+            if currency_type == "sonhos":
+                valor_formatado = format_sonhos(bet_value)
+                moeda_nome = "Sonhos"
+            else:
+                valor_formatado = f"R$ {bet_value:.2f}"
+                moeda_nome = "Reais"
+
             embed_update = discord.Embed(
                 title=mode.replace('-', ' ').title(),
                 color=EMBED_COLOR
             )
-            embed_update.add_field(name="Valor", value=f"R$ {bet_value:.2f}".replace('.', ','), inline=True)
-            embed_update.add_field(name="Fila", value=players_text, inline=True)
+            embed_update.add_field(name="Valor", value=valor_formatado, inline=True)
+            embed_update.add_field(name="Moeda", value=moeda_nome, inline=True)
+            embed_update.add_field(name="Fila", value=players_text, inline=False)
             if interaction.guild.icon:
                 embed_update.set_thumbnail(url=interaction.guild.icon.url)
             embed_update.set_footer(text=CREATOR_FOOTER)
-            
+
             await message.edit(embed=embed_update)
             log(f"✅ Painel atualizado após saída")
         except Exception as e:
@@ -785,7 +876,7 @@ async def cleanup_expired_queues():
                                         title=mode.replace('-', ' ').title(),
                                         color=EMBED_COLOR
                                     )
-                                    embed.add_field(name="Valor", value=f"R$ {bet_value:.2f}".replace('.', ','), inline=True)
+                                    embed.add_field(name="Valor", value=format_sonhos(bet_value), inline=True)
                                     embed.add_field(name="Time 1", value=team1_text, inline=True)
                                     embed.add_field(name="Time 2", value=team2_text, inline=True)
                                     if channel.guild and channel.guild.icon:
@@ -800,7 +891,7 @@ async def cleanup_expired_queues():
                                         title=mode.replace('-', ' ').title(),
                                         color=EMBED_COLOR
                                     )
-                                    embed.add_field(name="Valor", value=f"R$ {bet_value:.2f}".replace('.', ','), inline=True)
+                                    embed.add_field(name="Valor", value=format_sonhos(bet_value), inline=True)
                                     embed.add_field(name="Fila", value=players_text, inline=True)
                                     if channel.guild and channel.guild.icon:
                                         embed.set_thumbnail(url=channel.guild.icon.url)
@@ -818,6 +909,37 @@ async def cleanup_expired_queues():
 
 
 @bot.event
+async def on_message_delete(message):
+    """Detecta quando uma mensagem de painel é deletada e limpa os dados da fila"""
+    try:
+        # Verifica se a mensagem deletada tinha metadados de fila
+        metadata = db.get_queue_metadata(message.id)
+
+        if metadata:
+            queue_id = metadata['queue_id']
+            log(f"🗑️ Mensagem de painel deletada (ID: {message.id})")
+            log(f"🧹 Limpando dados da fila {queue_id}...")
+
+            # Remove metadados
+            db.delete_queue_metadata(message.id)
+
+            # Remove do dicionário em memória
+            if queue_id in queue_messages:
+                del queue_messages[queue_id]
+
+            # Limpa a fila (remove todos jogadores)
+            data = db._load_data()
+            if queue_id in data.get('queues', {}):
+                del data['queues'][queue_id]
+            if queue_id in data.get('queue_timestamps', {}):
+                del data['queue_timestamps'][queue_id]
+            db._save_data(data)
+
+            log(f"✅ Fila {queue_id} completamente removida (economia de espaço)")
+    except Exception as e:
+        log(f"⚠️ Erro ao processar mensagem deletada: {e}")
+
+@bot.event
 async def on_ready():
     log("=" * 50)
     log("✅ BOT CONECTADO AO DISCORD!")
@@ -826,7 +948,7 @@ async def on_ready():
     log(f'📛 Nome: {bot.user.name}')
     log(f'🆔 ID: {bot.user.id}')
     log(f'🌐 Servidores: {len(bot.guilds)}')
-    
+
     try:
         log("🔄 Sincronizando comandos slash...")
         synced = await bot.tree.sync()
@@ -844,7 +966,7 @@ async def on_ready():
     # Registra apenas UMA VEZ cada view persistente
     # IMPORTANTE: Não criar novas instâncias, reutilizar as mesmas
     if not hasattr(bot, '_persistent_views_registered'):
-        bot.add_view(QueueButton(mode="", bet_value=0, mediator_fee=0))
+        bot.add_view(QueueButton(mode="", bet_value=0, mediator_fee=0, currency_type="sonhos"))
         bot.add_view(ConfirmPaymentButton(bet_id=""))
         bot._persistent_views_registered = True
         log('✅ Views persistentes registradas')
@@ -855,18 +977,18 @@ async def on_ready():
     if not hasattr(bot, '_queue_metadata_recovered'):
         log('🔄 Recuperando metadados de filas existentes...')
         all_metadata = db.get_all_queue_metadata()
-        
+
         # PASSO 1: Limpar jogadores que estão em apostas ativas das filas
         active_bets = db.get_all_active_bets()
         active_players = set()
         for bet in active_bets.values():
             active_players.add(bet.player1_id)
             active_players.add(bet.player2_id)
-        
+
         log(f'🧹 Limpando {len(active_players)} jogadores que estão em apostas ativas')
         for player_id in active_players:
             db.remove_from_all_queues(player_id)
-        
+
         # PASSO 2: Recuperar metadados e popular queue_messages
         for message_id_str, metadata in all_metadata.items():
             queue_id = metadata['queue_id']
@@ -874,14 +996,14 @@ async def on_ready():
             message_id = metadata['message_id']
             mode = metadata['mode']
             bet_value = metadata['bet_value']
-            
+
             # Restaura no dicionário em memória
             queue_messages[queue_id] = (channel_id, message_id, mode, bet_value)
-            
+
             # Log detalhado de cada fila recuperada
             current_queue = db.get_queue(queue_id)
             log(f'📋 Fila {queue_id}: {len(current_queue)} jogadores')
-        
+
         log(f'✅ {len(all_metadata)} filas recuperadas e sincronizadas')
         bot._queue_metadata_recovered = True
 
@@ -895,22 +1017,25 @@ async def on_ready():
         log('ℹ️ Tarefas de limpeza já estavam rodando')
 
 
-
-
-
 @bot.tree.command(name="mostrar-fila", description="[MODERADOR] Criar mensagem com botão para entrar na fila")
 @app_commands.describe(
     modo="Escolha o modo de jogo",
     valor="Valor da aposta (exemplo: 5.00)",
-    taxa="Taxa do mediador (exemplo: 0.50)"
+    taxa="Taxa do mediador (exemplo: 0.50)",
+    moeda="Tipo de moeda da aposta (Reais ou Sonhos)"
 )
 @app_commands.choices(modo=[
     app_commands.Choice(name="1v1 Misto", value="1v1-misto"),
     app_commands.Choice(name="1v1 Mob", value="1v1-mob"),
+    app_commands.Choice(name="1v1 Moeda", value="1v1-moeda"),
     app_commands.Choice(name="2v2 Misto", value="2v2-misto"),
     app_commands.Choice(name="2v2 Mob", value="2v2-mob"),
 ])
-async def mostrar_fila(interaction: discord.Interaction, modo: app_commands.Choice[str], valor: float, taxa: float):
+@app_commands.choices(moeda=[
+    app_commands.Choice(name="💰 Reais", value="reais"),
+    app_commands.Choice(name="💭 Sonhos", value="sonhos"),
+])
+async def mostrar_fila(interaction: discord.Interaction, modo: app_commands.Choice[str], valor: float, taxa: float, moeda: app_commands.Choice[str]):
     # Busca o cargo de mediador configurado
     mediator_role_id = db.get_mediator_role(interaction.guild.id)
 
@@ -932,41 +1057,49 @@ async def mostrar_fila(interaction: discord.Interaction, modo: app_commands.Choi
         return
 
     mode = modo.value
+    currency_type = moeda.value
+
+    # Formata o valor baseado no tipo de moeda
+    if currency_type == "sonhos":
+        valor_formatado = format_sonhos(valor)
+    else:
+        valor_formatado = f"R$ {valor:.2f}"
 
     embed = discord.Embed(
         title=modo.name,
         color=EMBED_COLOR
     )
 
-    embed.add_field(name="Valor", value=f"R$ {valor:.2f}".replace('.', ','), inline=True)
-    embed.add_field(name="Fila", value="Vazio", inline=True)
+    embed.add_field(name="Valor", value=valor_formatado, inline=True)
+    embed.add_field(name="Moeda", value=moeda.name, inline=True)
+    embed.add_field(name="Fila", value="Vazio", inline=False)
     if interaction.guild.icon:
         embed.set_thumbnail(url=interaction.guild.icon.url)
     embed.set_footer(text=CREATOR_FOOTER)
 
-    # Defer para evitar timeout
+    # Defer a resposta para evitar timeout
     await interaction.response.defer()
 
     # Envia a mensagem primeiro
     message = await interaction.followup.send(embed=embed, wait=True)
-    
+
     log(f"📝 Mensagem da fila criada com ID: {message.id}")
 
     # Cria o view COM o message_id correto
-    view = QueueButton(mode, valor, taxa, message.id)
-    
+    view = QueueButton(mode, valor, taxa, message.id, currency_type)
+
     # Salva os metadados da fila no banco de dados ANTES de editar a mensagem
     queue_id = f"{mode}_{message.id}"
-    db.save_queue_metadata(message.id, mode, valor, taxa, interaction.channel.id)
-    log(f"💾 Metadados salvos: queue_id={queue_id}, bet_value={valor}, mediator_fee={taxa}")
+    db.save_queue_metadata(message.id, mode, valor, taxa, interaction.channel.id, currency_type)
+    log(f"💾 Metadados salvos: queue_id={queue_id}, bet_value={valor}, mediator_fee={taxa}, currency={currency_type}")
 
     # Salva a informação da fila em memória
-    queue_messages[queue_id] = (interaction.channel.id, message.id, mode, valor)
+    queue_messages[queue_id] = (interaction.channel.id, message.id, mode, valor, currency_type)
     log(f"📋 Fila registrada em memória: {queue_id}")
 
     # Agora edita a mensagem com os botões
     await message.edit(embed=embed, view=view)
-    log(f"✅ Fila criada e pronta para uso: {mode}")
+    log(f"✅ Fila criada e pronta para uso: {mode} com moeda {currency_type}")
 
 
 
@@ -975,12 +1108,12 @@ async def mostrar_fila(interaction: discord.Interaction, modo: app_commands.Choi
 
 async def create_bet_channel(guild: discord.Guild, mode: str, player1_id: int, player2_id: int, bet_value: float, mediator_fee: float, source_channel_id: int = None):
     log(f"🔧 create_bet_channel chamada: mode={mode}, player1={player1_id}, player2={player2_id}, bet_value={bet_value}, mediator_fee={mediator_fee}")
-    
+
     # VALIDAÇÃO CRÍTICA: Nunca permitir valores zero
     if bet_value <= 0 or mediator_fee < 0:
         log(f"❌ ERRO CRÍTICO: Valores inválidos - bet_value={bet_value}, mediator_fee={mediator_fee}. Abortando criação.")
         return
-    
+
     # Validação dupla com lock para evitar race condition
     if db.is_user_in_active_bet(player1_id) or db.is_user_in_active_bet(player2_id):
         log(f"❌ Um dos jogadores já está em uma aposta ativa. Abortando criação.")
@@ -1003,7 +1136,7 @@ async def create_bet_channel(guild: discord.Guild, mode: str, player1_id: int, p
         if not player2:
             log(f"🔄 Player2 não no cache, fazendo fetch...")
             player2 = await guild.fetch_member(player2_id)
-        
+
         log(f"✅ Jogadores encontrados: {player1.name} e {player2.name}")
 
         # Busca o canal de origem (onde foi usado /mostrar-fila)
@@ -1015,7 +1148,7 @@ async def create_bet_channel(guild: discord.Guild, mode: str, player1_id: int, p
             db.add_to_queue(mode, player1_id)
             db.add_to_queue(mode, player2_id)
             return
-        
+
         log(f"✅ Canal de origem encontrado: {source_channel.name}")
 
         # Criar tópico ao invés de canal
@@ -1060,11 +1193,11 @@ async def create_bet_channel(guild: discord.Guild, mode: str, player1_id: int, p
             log(f"⚠️ Erro ao adicionar jogadores ao tópico: {e}")
 
         bet_id = f"{player1_id}_{player2_id}_{int(datetime.now().timestamp())}"
-        
+
         # Log final antes de criar o objeto Bet
-        log(f"💰 Criando objeto Bet com valores: bet_value={bet_value} ({type(bet_value)}), mediator_fee={mediator_fee} ({type(mediator_fee)})")
+        log(f"💰 Criando objeto Bet com valores: bet_value={bet_value}, mediator_fee={mediator_fee}")
         log(f"🆔 Thread criado com ID: {thread.id} (type={type(thread.id)})")
-        
+
         bet = Bet(
             bet_id=bet_id,
             mode=mode,
@@ -1076,7 +1209,7 @@ async def create_bet_channel(guild: discord.Guild, mode: str, player1_id: int, p
             mediator_fee=float(mediator_fee)
         )
         db.add_active_bet(bet)
-        
+
         log(f"✅ Bet criado e salvo no banco:")
         log(f"   - bet_id: {bet.bet_id}")
         log(f"   - channel_id: {bet.channel_id}")
@@ -1099,13 +1232,13 @@ async def create_bet_channel(guild: discord.Guild, mode: str, player1_id: int, p
 
     # Log para debug - verificar valores recebidos
     log(f"💰 Criando embed com valores: bet_value={bet_value}, mediator_fee={mediator_fee}")
-    
-    # Formata valores corretamente (substitui ponto por vírgula)
-    valor_formatado = f"R$ {float(bet_value):.2f}".replace('.', ',')
-    taxa_formatada = f"R$ {float(mediator_fee):.2f}".replace('.', ',')
-    
+
+    # Formata valores usando a função format_sonhos
+    valor_formatado = format_sonhos(float(bet_value))
+    taxa_formatada = format_sonhos(float(mediator_fee))
+
     log(f"💰 Valores formatados: {valor_formatado} / {taxa_formatada}")
-    
+
     embed = discord.Embed(
         title="Aposta - Aguardando Mediador",
         description=admin_mention,
@@ -1137,7 +1270,7 @@ async def confirmar_pagamento(interaction: discord.Interaction):
             ephemeral=True
         )
         return
-    
+
     log(f"✅ Aposta encontrada: {bet.bet_id}")
 
     if bet.mediator_id == 0:
@@ -1217,7 +1350,7 @@ async def finalizar_aposta(interaction: discord.Interaction, vencedor: discord.M
     log(f"   - Canal ID: {interaction.channel_id} (type={type(interaction.channel_id)})")
     log(f"   - Canal: {interaction.channel}")
     log(f"   - É Thread? {isinstance(interaction.channel, discord.Thread)}")
-    
+
     bet = db.get_bet_by_channel(interaction.channel_id)
 
     if not bet:
@@ -1227,14 +1360,14 @@ async def finalizar_aposta(interaction: discord.Interaction, vencedor: discord.M
         log(f"📊 Apostas ativas: {len(all_bets)}")
         for bet_id, active_bet in all_bets.items():
             log(f"  - Bet {bet_id}: canal={active_bet.channel_id} (type={type(active_bet.channel_id)})")
-        
+
         await interaction.response.send_message(
             "❌ Este tópico não é uma aposta ativa.\n"
             "💡 Verifique se você está no tópico correto da aposta.",
             ephemeral=True
         )
         return
-    
+
     log(f"✅ Aposta encontrada: {bet.bet_id}")
 
     # Verifica se é o mediador da aposta OU se tem o cargo de mediador
@@ -1293,7 +1426,7 @@ async def cancelar_aposta(interaction: discord.Interaction):
     log(f"🔍 /cancelar-aposta chamado")
     log(f"   - Canal ID: {interaction.channel_id} (type={type(interaction.channel_id)})")
     log(f"   - É Thread? {isinstance(interaction.channel, discord.Thread)}")
-    
+
     bet = db.get_bet_by_channel(interaction.channel_id)
 
     if not bet:
@@ -1302,14 +1435,14 @@ async def cancelar_aposta(interaction: discord.Interaction):
         log(f"📊 Apostas ativas: {len(all_bets)}")
         for bet_id, active_bet in all_bets.items():
             log(f"  - Bet {bet_id}: canal={active_bet.channel_id}")
-        
+
         await interaction.response.send_message(
             "❌ Este tópico não é uma aposta ativa.\n"
             "💡 Verifique se você está no tópico correto da aposta.",
             ephemeral=True
         )
         return
-    
+
     log(f"✅ Aposta encontrada: {bet.bet_id}")
 
     # Verifica se é o mediador da aposta OU se tem o cargo de mediador
@@ -1456,10 +1589,11 @@ async def desbugar_filas(interaction: discord.Interaction):
         return
 
     active_bets = db.get_all_active_bets()
+    all_metadata = db.get_all_queue_metadata()
 
-    if not active_bets:
+    if not active_bets and not all_metadata:
         await interaction.response.send_message(
-            "Não há apostas ativas para cancelar.",
+            "Não há apostas ativas ou painéis de fila para limpar.",
             ephemeral=True
         )
         return
@@ -1469,6 +1603,7 @@ async def desbugar_filas(interaction: discord.Interaction):
 
     deleted_channels = 0
     cancelled_bets = 0
+    deleted_panels = 0
 
     # Cancelar todas as apostas ativas
     for bet_id, bet in list(active_bets.items()):
@@ -1493,19 +1628,45 @@ async def desbugar_filas(interaction: discord.Interaction):
         db.finish_bet(bet)
         cancelled_bets += 1
 
-    # Limpar todas as filas
+    # Deletar todos os painéis de fila
+    for message_id_str, metadata in list(all_metadata.items()):
+        try:
+            channel_id = metadata.get('channel_id')
+            message_id = metadata.get('message_id')
+            
+            if channel_id and message_id:
+                channel = interaction.guild.get_channel(channel_id)
+                if channel:
+                    try:
+                        message = await channel.fetch_message(message_id)
+                        await message.delete()
+                        deleted_panels += 1
+                        log(f"🗑️ Painel deletado: mensagem {message_id} no canal {channel_id}")
+                    except discord.NotFound:
+                        log(f"⚠️ Mensagem {message_id} não encontrada (já foi deletada)")
+                    except Exception as e:
+                        log(f"⚠️ Erro ao deletar mensagem {message_id}: {e}")
+        except Exception as e:
+            log(f"⚠️ Erro ao processar metadata {message_id_str}: {e}")
+
+    # Limpar todas as filas e metadados
     data = db._load_data()
     data['queues'] = {}
     data['queue_timestamps'] = {}
+    data['queue_metadata'] = {}
     db._save_data(data)
+
+    # Limpar dicionário em memória
+    queue_messages.clear()
 
     embed = discord.Embed(
         title="Sistema Desbugado",
-        description="Todas as apostas ativas foram canceladas e as filas limpas.",
+        description="Todas as apostas ativas foram canceladas, filas limpas e painéis deletados.",
         color=EMBED_COLOR
     )
     embed.add_field(name="Apostas Canceladas", value=str(cancelled_bets), inline=True)
     embed.add_field(name="Canais Deletados", value=str(deleted_channels), inline=True)
+    embed.add_field(name="Painéis Deletados", value=str(deleted_panels), inline=True)
     embed.add_field(name="Filas Limpas", value="Todas", inline=True)
     if interaction.guild.icon:
         embed.set_thumbnail(url=interaction.guild.icon.url)
@@ -1668,121 +1829,11 @@ async def run_bot_with_webserver():
         raise
 
 
-def create_bot_instance(bot_number: int):
-    """Cria uma nova instância do bot com todos os comandos e eventos"""
-    # Configuração de intents
-    bot_intents = discord.Intents(
-        guilds=True,
-        guild_messages=True,
-        members=True,
-        message_content=True
-    )
-    bot_intents.presences = False
-    bot_intents.typing = False
-    bot_intents.voice_states = False
-    bot_intents.integrations = False
-    bot_intents.webhooks = False
-    bot_intents.invites = False
-    bot_intents.emojis_and_stickers = False
-    bot_intents.bans = False
-    bot_intents.dm_messages = False
-    bot_intents.dm_reactions = False
-    bot_intents.dm_typing = False
-    bot_intents.guild_reactions = False
-    bot_intents.guild_typing = False
-    bot_intents.moderation = False
-
-    new_bot = commands.Bot(
-        command_prefix="!",
-        intents=bot_intents,
-        chunk_guilds_at_startup=False,
-        member_cache_flags=discord.MemberCacheFlags.none(),
-        max_messages=10
-    )
-
-    # Criar função de limpeza específica para esta instância do bot
-    async def cleanup_for_this_bot():
-        """Tarefa em background que remove jogadores que ficaram muito tempo na fila"""
-        await new_bot.wait_until_ready()
-        log(f"🧹 Iniciando sistema de limpeza automática de filas para Bot #{bot_number}")
-
-        while not new_bot.is_closed():
-            try:
-                expired_players = db.get_expired_queue_players(timeout_minutes=5)
-
-                if expired_players:
-                    log(f"🧹 [Bot #{bot_number}] Encontrados jogadores expirados em {len(expired_players)} filas")
-
-                    for queue_id, user_ids in expired_players.items():
-                        for user_id in user_ids:
-                            db.remove_from_queue(queue_id, user_id)
-                            log(f"⏱️ [Bot #{bot_number}] Removido usuário {user_id} da fila {queue_id} (timeout)")
-
-                        if queue_id in queue_messages:
-                            channel_id, message_id, mode, bet_value = queue_messages[queue_id]
-                            try:
-                                channel = new_bot.get_channel(channel_id)
-                                if channel:
-                                    message = await channel.fetch_message(message_id)
-                                    queue = db.get_queue(queue_id)
-
-                                    player_names = [f"<@{uid}>" for uid in queue]
-                                    players_text = "\n".join(player_names) if player_names else "Vazio"
-
-                                    embed = discord.Embed(
-                                        title=mode.replace('-', ' ').title(),
-                                        color=EMBED_COLOR
-                                    )
-                                    embed.add_field(name="Valor", value=f"R$ {bet_value:.2f}".replace('.', ','), inline=True)
-                                    embed.add_field(name="Fila", value=players_text, inline=True)
-                                    if channel.guild.icon:
-                                        embed.set_thumbnail(url=channel.guild.icon.url)
-                                    await message.edit(embed=embed)
-                            except Exception as e:
-                                log(f"Erro ao atualizar mensagem da fila {queue_id}: {e}")
-
-                await asyncio.sleep(60)
-
-            except Exception as e:
-                log(f"Erro na limpeza de filas [Bot #{bot_number}]: {e}")
-                await asyncio.sleep(60)
-
-    # Registrar evento on_ready
-    @new_bot.event
-    async def on_ready():
-        log("=" * 50)
-        log(f"✅ BOT #{bot_number} CONECTADO AO DISCORD!")
-        log("=" * 50)
-        log(f'👤 Usuário: {new_bot.user}')
-        log(f'📛 Nome: {new_bot.user.name}')
-        log(f'🆔 ID: {new_bot.user.id}')
-        log(f'🌐 Servidores: {len(new_bot.guilds)}')
-        
-        try:
-            log(f"🔄 Sincronizando comandos do Bot #{bot_number}...")
-            synced = await new_bot.tree.sync()
-            log(f'✅ Bot #{bot_number}: {len(synced)} comandos sincronizados')
-        except Exception as e:
-            log(f'⚠️ Erro ao sincronizar comandos do Bot #{bot_number}: {e}')
-
-        # Registrar views persistentes
-        log(f'📋 Registrando views persistentes para Bot #{bot_number}...')
-        new_bot.add_view(QueueButton(mode="", bet_value=0, mediator_fee=0))
-        new_bot.add_view(ConfirmPaymentButton(bet_id=""))
-        log(f'✅ Views persistentes registradas para Bot #{bot_number}')
-
-        # Inicia a tarefa de limpeza automática de filas para ESTE bot
-        new_bot.loop.create_task(cleanup_for_this_bot())
-
-    # Copiar todos os comandos da árvore do bot original
-    for command in bot.tree.get_commands():
-        new_bot.tree.add_command(command)
-
-    return new_bot
+# Esta função não é mais necessária - vamos usar apenas o bot principal
 
 async def run_bot_single():
     """Roda um único bot (modo econômico)"""
-    token = os.getenv("DISCORD_TOKEN") or os.getenv("DISCORD_TOKEN_1") or ""
+    token = os.getenv("TOKEN") or os.getenv("DISCORD_TOKEN") or os.getenv("DISCORD_TOKEN_1") or ""
     if not token:
         raise Exception("Configure DISCORD_TOKEN nas variáveis de ambiente.")
 
@@ -1790,50 +1841,18 @@ async def run_bot_single():
     await bot.start(token, reconnect=True)
 
 async def run_multiple_bots():
-    """Roda múltiplos bots simultaneamente com tokens diferentes na MESMA máquina"""
-    # Pegar os 3 tokens do ambiente
-    token1 = os.getenv("DISCORD_TOKEN_1") or os.getenv("DISCORD_TOKEN") or ""
-    token2 = os.getenv("DISCORD_TOKEN_2") or ""
-    token3 = os.getenv("DISCORD_TOKEN_3") or ""
+    """Roda o bot com o primeiro token disponível"""
+    # Pegar o primeiro token disponível
+    token = os.getenv("TOKEN") or os.getenv("DISCORD_TOKEN_1") or os.getenv("DISCORD_TOKEN") or ""
 
-    tokens = [t for t in [token1, token2, token3] if t]
+    if not token:
+        raise Exception("Configure DISCORD_TOKEN nas variáveis de ambiente.")
 
-    if not tokens:
-        raise Exception("Configure pelo menos DISCORD_TOKEN_1 nas variáveis de ambiente.")
+    log(f"🤖 Iniciando bot...")
+    log(f"📋 Token: {token[:20]}...{token[-10:]}")
 
-    # Limita a 3 bots para economizar recursos
-    if len(tokens) > 3:
-        log("⚠️ AVISO: Mais de 3 tokens configurados. Limitando a 3 bots para economizar recursos.")
-        tokens = tokens[:3]
-
-    log(f"🤖 Modo múltiplos bots: Iniciando {len(tokens)} bot(s)...")
-    log(f"📋 Tokens encontrados:")
-    for i, token in enumerate(tokens, 1):
-        log(f"  {i}. DISCORD_TOKEN_{i}: {token[:20]}...{token[-10:]}")
-    
-    if len(tokens) > 1:
-        log("💡 Múltiplos bots rodando na MESMA máquina (Fly.io)")
-
-    # Criar uma instância de bot para cada token
-    bot_instances = []
-    tasks = []
-
-    for i, token in enumerate(tokens, 1):
-        log(f"🚀 Iniciando bot #{i}...")
-        new_bot = create_bot_instance(bot_number=i)
-        bot_instances.append(new_bot)
-        
-        # Cria task de inicialização do bot
-        task = asyncio.create_task(new_bot.start(token, reconnect=True))
-        tasks.append(task)
-        
-        # Pequeno delay entre inicializações para evitar rate limit
-        if i < len(tokens):
-            await asyncio.sleep(2)
-
-    # Rodar todos os bots simultaneamente até todos terminarem
-    log(f"✅ Todos os {len(tokens)} bots foram iniciados e rodam na mesma máquina")
-    await asyncio.gather(*tasks, return_exceptions=True)
+    # Usar o bot principal que já tem todos os comandos registrados
+    await bot.start(token, reconnect=True)
 
 try:
     if IS_FLYIO:
@@ -1850,7 +1869,7 @@ try:
             await start_web_server()
             await asyncio.sleep(1)
             log("✅ Servidor HTTP rodando")
-            
+
             # No Fly.io, suporta múltiplos bots (até 3)
             log("🤖 Fly.io: Modo múltiplos bots")
             log("💡 Configure DISCORD_TOKEN_1, DISCORD_TOKEN_2, DISCORD_TOKEN_3")
@@ -1866,26 +1885,26 @@ try:
             # Iniciar servidor web primeiro
             await start_web_server()
             await asyncio.sleep(1)
-            
+
             # No Railway, usar apenas 1 bot por deployment
-            token = os.getenv("DISCORD_TOKEN") or os.getenv("DISCORD_TOKEN_1") or ""
+            token = os.getenv("TOKEN") or os.getenv("DISCORD_TOKEN") or os.getenv("DISCORD_TOKEN_1") or ""
             if not token:
                 raise Exception("Configure DISCORD_TOKEN nas variáveis de ambiente")
-            
+
             log("🤖 Railway: Modo single bot")
             await bot.start(token, reconnect=True)
 
         asyncio.run(run_all())
     else:
         log("Iniciando bots no Replit/Local com servidor HTTP...")
-        
+
         async def run_replit():
             # Iniciar servidor web primeiro
             await start_web_server()
             await asyncio.sleep(1)
             # No Replit, pode rodar múltiplos bots se necessário
             await run_multiple_bots()
-        
+
         asyncio.run(run_replit())
 
 except discord.HTTPException as e:
