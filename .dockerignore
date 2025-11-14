@@ -1,0 +1,60 @@
+# Python cache
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info
+dist
+build
+
+# Git
+.git
+.gitignore
+.github
+
+# Ambientes virtuais
+.env
+.venv
+venv/
+ENV/
+.pythonlibs/
+
+# Logs
+*.log
+
+# Replit específico
+.replit
+replit.nix
+replit.md
+uv.lock
+
+# Documentação (não precisa no container)
+*.md
+!requirements.txt
+DEPLOY_FLYIO.md
+DEPLOY_RAILWAY.md
+INSTRUCOES.md
+README.md
+
+# Outros deploys
+railway.json
+Procfile
+poetry.lock
+pyproject.toml
+runtime.txt
+
+# Assets desnecessários
+*.png
+*.jpg
+*.jpeg
+*.gif
+generated-icon.png
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
