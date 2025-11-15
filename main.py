@@ -2592,15 +2592,116 @@ async def run_bot_single():
     log("🤖 Modo econômico: Iniciando 1 bot...")
     await bot.start(token, reconnect=True)
 
-def create_bot_instance():
-    """Cria uma nova instância de bot com as mesmas configurações"""
-    return commands.Bot(
+def register_commands(target_bot):
+    """Registra todos os comandos em uma instância de bot"""
+    # Todos os comandos já estão registrados globalmente via @bot.tree.command
+    # Então eles serão automaticamente incluídos em novas instâncias
+    pass
+
+def create_bot_instance(bot_number):
+    """Cria uma nova instância de bot com as mesmas configurações e comandos"""
+    new_bot = commands.Bot(
         command_prefix="!",
         intents=intents,
         chunk_guilds_at_startup=False,
         member_cache_flags=discord.MemberCacheFlags.none(),
         max_messages=10
     )
+    
+    # Copiar eventos do bot principal
+    @new_bot.event
+    async def on_ready():
+        log("=" * 50)
+        log(f"✅ BOT #{bot_number} CONECTADO AO DISCORD!")
+        log("=" * 50)
+        log(f'👤 Usuário: {new_bot.user}')
+        log(f'📛 Nome: {new_bot.user.name}')
+        log(f'🆔 ID: {new_bot.user.id}')
+        log(f'🌐 Servidores: {len(new_bot.guilds)}')
+
+        try:
+            log(f"🔄 Bot #{bot_number}: Sincronizando comandos slash...")
+            synced_global = await new_bot.tree.sync(guild=None)
+            log(f'✅ Bot #{bot_number}: {len(synced_global)} comandos sincronizados globalmente')
+            for cmd in synced_global:
+                log(f'  - /{cmd.name}')
+        except Exception as e:
+            log(f'⚠️ Bot #{bot_number}: Erro ao sincronizar comandos: {e}')
+
+        # Registrar views persistentes
+        if not hasattr(new_bot, '_persistent_views_registered'):
+            new_bot.add_view(QueueButton(mode="", bet_value=0, mediator_fee=0, currency_type="sonhos"))
+            new_bot.add_view(ConfirmPaymentButton(bet_id=""))
+            new_bot._persistent_views_registered = True
+            log(f'✅ Bot #{bot_number}: Views persistentes registradas')
+
+        # Recuperar metadados de filas (cada bot compartilha o mesmo banco)
+        if not hasattr(new_bot, '_queue_metadata_recovered'):
+            log(f'🔄 Bot #{bot_number}: Recuperando metadados de filas...')
+            all_metadata = db.get_all_queue_metadata()
+            
+            active_bets = db.get_all_active_bets()
+            active_players = set()
+            for bet in active_bets.values():
+                active_players.add(bet.player1_id)
+                active_players.add(bet.player2_id)
+            
+            log(f'🧹 Bot #{bot_number}: Limpando {len(active_players)} jogadores em apostas ativas')
+            for player_id in active_players:
+                db.remove_from_all_queues(player_id)
+            
+            for message_id_str, metadata in all_metadata.items():
+                queue_id = metadata['queue_id']
+                channel_id = metadata['channel_id']
+                message_id = metadata['message_id']
+                mode = metadata['mode']
+                bet_value = metadata['bet_value']
+                queue_messages[queue_id] = (channel_id, message_id, mode, bet_value)
+                current_queue = db.get_queue(queue_id)
+                log(f'📋 Bot #{bot_number}: Fila {queue_id}: {len(current_queue)} jogadores')
+            
+            log(f'✅ Bot #{bot_number}: {len(all_metadata)} filas recuperadas')
+            new_bot._queue_metadata_recovered = True
+        
+        # Garante assinatura permanente do servidor auto-autorizado
+        if not hasattr(new_bot, '_auto_authorized_setup'):
+            auto_guild = new_bot.get_guild(AUTO_AUTHORIZED_GUILD_ID)
+            if auto_guild:
+                if not db.is_subscription_active(AUTO_AUTHORIZED_GUILD_ID):
+                    db.create_subscription(AUTO_AUTHORIZED_GUILD_ID, None)
+                    log(f"✅ Bot #{bot_number}: Assinatura permanente criada para {auto_guild.name}")
+            new_bot._auto_authorized_setup = True
+    
+    @new_bot.event
+    async def on_guild_join(guild: discord.Guild):
+        log(f"➕ Bot #{bot_number}: Adicionado ao servidor {guild.name} ({guild.id})")
+        if not await ensure_guild_authorized(guild):
+            log(f"❌ Bot #{bot_number}: Servidor {guild.name} não autorizado, saindo...")
+    
+    @new_bot.event
+    async def on_message_delete(message):
+        try:
+            metadata = db.get_queue_metadata(message.id)
+            if metadata:
+                queue_id = metadata['queue_id']
+                log(f"🗑️ Bot #{bot_number}: Mensagem de painel deletada (ID: {message.id})")
+                db.delete_queue_metadata(message.id)
+                if queue_id in queue_messages:
+                    del queue_messages[queue_id]
+                data = db._load_data()
+                if queue_id in data.get('queues', {}):
+                    del data['queues'][queue_id]
+                if queue_id in data.get('queue_timestamps', {}):
+                    del data['queue_timestamps'][queue_id]
+                db._save_data(data)
+                log(f"✅ Bot #{bot_number}: Fila {queue_id} removida")
+        except Exception as e:
+            log(f"⚠️ Bot #{bot_number}: Erro ao processar mensagem deletada: {e}")
+    
+    # Registrar todos os comandos manualmente no novo bot
+    # (Os comandos serão sincronizados no on_ready)
+    
+    return new_bot
 
 def setup_subscription_check_task(bot_instance, bot_number):
     """Configura task de verificação de assinatura para uma instância de bot"""
@@ -2725,59 +2826,29 @@ async def run_multiple_bots():
     
     log(f"🔢 {len(tokens)} token(s) detectado(s)")
     
-    # Se tiver apenas 1 token, usar o bot principal
-    if len(tokens) == 1:
-        bot_num, token = tokens[0]
-        log(f"🤖 Modo SINGLE BOT")
-        log(f"📋 Token: {token[:20]}...{token[-10:]}")
-        
-        # Configurar task de verificação de assinatura
-        subscription_task = setup_subscription_check_task(bot, bot_num)
-        subscription_task.start()
-        log(f"🔐 Bot #{bot_num}: Task de verificação de assinaturas iniciada")
-        
-        await bot.start(token, reconnect=True)
-        return
+    # AVISO: Múltiplos bots não são recomendados no mesmo deployment
+    if len(tokens) > 1:
+        log(f"⚠️ ATENÇÃO: {len(tokens)} tokens configurados")
+        log(f"⚠️ Para múltiplos bots, crie deployments separados no Fly.io:")
+        log(f"⚠️   fly apps create botss-1")
+        log(f"⚠️   fly apps create botss-2")
+        log(f"⚠️   fly secrets set DISCORD_TOKEN=token1 -a botss-1")
+        log(f"⚠️   fly secrets set DISCORD_TOKEN=token2 -a botss-2")
+        log(f"⚠️")
+        log(f"⚠️ Usando apenas o PRIMEIRO token (DISCORD_TOKEN_1)")
+        log(f"⚠️")
     
-    # Múltiplos tokens: criar instâncias separadas e rodar em paralelo
-    log(f"🤖 Modo MÚLTIPLOS BOTS ({len(tokens)} bots)")
-    log(f"💡 Cada bot terá seus próprios comandos e eventos")
+    # Sempre usa apenas 1 token por deployment
+    bot_num, token = tokens[0]
+    log(f"🤖 Iniciando bot único")
+    log(f"📋 Token: {token[:20]}...{token[-10:]}")
     
-    # Criar tarefas para cada bot
-    tasks = []
-    bot_instances = []
+    # Configurar task de verificação de assinatura
+    subscription_task = setup_subscription_check_task(bot, bot_num)
+    subscription_task.start()
+    log(f"🔐 Bot #{bot_num}: Task de verificação de assinaturas iniciada")
     
-    for idx, (bot_num, token) in enumerate(tokens):
-        is_primary = (idx == 0)
-        
-        if is_primary:
-            # Para o primeiro token, usar o bot principal já configurado
-            bot_instance = bot
-            log(f"👑 Bot #{bot_num}: Usando instância principal")
-        else:
-            # Para tokens adicionais, criar novas instâncias de bot
-            bot_instance = create_bot_instance()
-            
-            # Copiar a árvore de comandos do bot principal
-            bot_instance.tree._copy_from(bot.tree)
-            
-            # Copiar todos os eventos do bot principal
-            for event_name, listeners in bot.extra_events.items():
-                for listener in listeners:
-                    bot_instance.add_listener(listener, event_name)
-            
-            log(f"🆕 Bot #{bot_num}: Nova instância criada e configurada")
-        
-        bot_instances.append(bot_instance)
-        task = run_single_bot_instance(bot_instance, token, bot_num, is_primary)
-        tasks.append(task)
-    
-    # Rodar todos os bots em paralelo
-    log(f"🚀 Iniciando {len(tasks)} bots simultaneamente...")
-    log(f"✅ TODOS os bots verificam e saem de servidores sem assinatura")
-    log(f"💾 Apenas o Bot #1 remove assinaturas do banco de dados")
-    
-    await asyncio.gather(*tasks, return_exceptions=True)
+    await bot.start(token, reconnect=True)
 
 try:
     if IS_FLYIO:
