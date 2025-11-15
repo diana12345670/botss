@@ -1124,12 +1124,75 @@ async def on_message_delete(message):
 
 @bot.event
 async def on_guild_join(guild: discord.Guild):
-    """Quando o bot entra em um servidor, verifica se está autorizado"""
+    """Quando o bot entra em um servidor, cria assinatura automática de 10 dias"""
     log(f"➕ Bot adicionado ao servidor: {guild.name} ({guild.id})")
     
-    # Verifica se o servidor está autorizado
-    if not await ensure_guild_authorized(guild):
-        log(f"❌ Servidor {guild.name} não está autorizado, saindo...")
+    # Servidor auto-autorizado tem assinatura permanente
+    if guild.id == AUTO_AUTHORIZED_GUILD_ID:
+        if not db.is_subscription_active(guild.id):
+            db.create_subscription(guild.id, None)
+            log(f"✅ Assinatura permanente criada para {guild.name}")
+        return
+    
+    # Cria assinatura automática de 10 dias para novos servidores
+    if not db.is_subscription_active(guild.id):
+        duration_days = 10
+        duration_seconds = duration_days * 86400  # 10 dias em segundos
+        db.create_subscription(guild.id, duration_seconds)
+        log(f"✅ Assinatura de {duration_days} dias criada automaticamente para {guild.name} ({guild.id})")
+        
+        # Envia mensagem de boas-vindas
+        try:
+            channel = None
+            if guild.system_channel and guild.system_channel.permissions_for(guild.me).send_messages:
+                channel = guild.system_channel
+            else:
+                for ch in guild.text_channels:
+                    if ch.permissions_for(guild.me).send_messages:
+                        channel = ch
+                        break
+            
+            if channel:
+                from datetime import datetime, timedelta
+                expires_at = datetime.now() + timedelta(seconds=duration_seconds)
+                
+                embed = discord.Embed(
+                    title="🎉 Bem-vindo ao Bot de Apostas!",
+                    description=f"Obrigado por adicionar o bot ao servidor **{guild.name}**!",
+                    color=0x00FF00
+                )
+                embed.add_field(
+                    name="🎁 Período de Teste",
+                    value=f"Você ganhou **{duration_days} dias grátis** para testar o bot!",
+                    inline=False
+                )
+                embed.add_field(
+                    name="📅 Expira em",
+                    value=expires_at.strftime('%d/%m/%Y às %H:%M'),
+                    inline=True
+                )
+                embed.add_field(
+                    name="🚀 Começar",
+                    value="Use `/setup @cargo` para configurar o cargo de mediador",
+                    inline=False
+                )
+                embed.add_field(
+                    name="📩 Renovar Acesso",
+                    value=(
+                        "Para continuar usando após o período de teste, entre em contato:\n"
+                        "• [Discord DM](https://discord.com/users/1339336477661724674)\n"
+                        "• Servidor: https://discord.gg/yFhyc4RS5c"
+                    ),
+                    inline=False
+                )
+                embed.set_footer(text=CREATOR_FOOTER)
+                
+                await channel.send(embed=embed)
+                log(f"📨 Mensagem de boas-vindas enviada para {guild.name}")
+        except Exception as e:
+            log(f"⚠️ Erro ao enviar mensagem de boas-vindas: {e}")
+    else:
+        log(f"ℹ️ Servidor {guild.name} já tem assinatura ativa")
 
 @bot.event
 async def on_ready():
@@ -1143,8 +1206,6 @@ async def on_ready():
 
     try:
         log("🔄 Sincronizando comandos slash...")
-        # Limpa comandos antigos primeiro (importante após mudanças)
-        bot.tree.clear_commands(guild=None)
         # Sincroniza globalmente (incluindo DM) - None = global
         synced_global = await bot.tree.sync(guild=None)
         log(f'✅ {len(synced_global)} comandos sincronizados globalmente (DM incluída)')
@@ -1228,10 +1289,10 @@ async def on_ready():
                 log(f"✅ Assinatura permanente automática criada para {auto_guild.name}")
         bot._auto_authorized_setup = True
     
-    # Verifica servidores sem assinatura (apenas na primeira vez)
+    # Verifica servidores sem assinatura e dá 10 dias automaticamente (apenas na primeira vez)
     if not hasattr(bot, '_initial_guild_check'):
-        log('🔍 Verificando autorização dos servidores atuais...')
-        unauthorized_guilds = []
+        log('🔍 Verificando servidores existentes...')
+        guilds_without_subscription = []
         for guild in bot.guilds:
             # Pula o servidor auto-autorizado
             if guild.id == AUTO_AUTHORIZED_GUILD_ID:
@@ -1239,18 +1300,61 @@ async def on_ready():
             
             if not db.is_subscription_active(guild.id):
                 log(f"⚠️ Servidor sem assinatura detectado: {guild.name} ({guild.id})")
-                unauthorized_guilds.append(guild)
+                guilds_without_subscription.append(guild)
         
-        # Processa servidores não autorizados com delay para evitar rate limiting
-        async def process_unauthorized_guilds():
-            for i, guild in enumerate(unauthorized_guilds):
-                await ensure_guild_authorized(guild)
-                # Aguarda 2 segundos entre cada remoção para evitar rate limit
-                if i < len(unauthorized_guilds) - 1:
-                    await asyncio.sleep(2)
+        # Cria assinaturas de 10 dias para servidores existentes
+        async def create_subscriptions_for_existing_guilds():
+            for guild in guilds_without_subscription:
+                duration_days = 10
+                duration_seconds = duration_days * 86400
+                db.create_subscription(guild.id, duration_seconds)
+                log(f"✅ Assinatura de {duration_days} dias criada para servidor existente: {guild.name} ({guild.id})")
+                
+                # Tenta enviar mensagem de notificação
+                try:
+                    channel = None
+                    if guild.system_channel and guild.system_channel.permissions_for(guild.me).send_messages:
+                        channel = guild.system_channel
+                    else:
+                        for ch in guild.text_channels:
+                            if ch.permissions_for(guild.me).send_messages:
+                                channel = ch
+                                break
+                    
+                    if channel:
+                        from datetime import datetime, timedelta
+                        expires_at = datetime.now() + timedelta(seconds=duration_seconds)
+                        
+                        embed = discord.Embed(
+                            title="🎁 Período de Teste Ativado!",
+                            description=f"O bot agora requer assinatura. Como você já está usando o bot, ganhamos **{duration_days} dias grátis**!",
+                            color=0x00FF00
+                        )
+                        embed.add_field(
+                            name="📅 Expira em",
+                            value=expires_at.strftime('%d/%m/%Y às %H:%M'),
+                            inline=True
+                        )
+                        embed.add_field(
+                            name="📩 Renovar Acesso",
+                            value=(
+                                "Para continuar usando após o período de teste:\n"
+                                "• [Discord DM](https://discord.com/users/1339336477661724674)\n"
+                                "• Servidor: https://discord.gg/yFhyc4RS5c"
+                            ),
+                            inline=False
+                        )
+                        embed.set_footer(text=CREATOR_FOOTER)
+                        
+                        await channel.send(embed=embed)
+                        log(f"📨 Mensagem de notificação enviada para {guild.name}")
+                except Exception as e:
+                    log(f"⚠️ Erro ao enviar mensagem para {guild.name}: {e}")
+                
+                await asyncio.sleep(2)  # Delay para evitar rate limit
         
-        if unauthorized_guilds:
-            bot.loop.create_task(process_unauthorized_guilds())
+        if guilds_without_subscription:
+            bot.loop.create_task(create_subscriptions_for_existing_guilds())
         
         bot._initial_guild_check = True
         log('✅ Verificação inicial de servidores concluída')
@@ -2607,18 +2711,94 @@ async def run_bot_single():
     await bot.start(token, reconnect=True)
 
 async def run_multiple_bots():
-    """Roda o bot com o primeiro token disponível"""
-    # Pegar o primeiro token disponível
-    token = os.getenv("TOKEN") or os.getenv("DISCORD_TOKEN_1") or os.getenv("DISCORD_TOKEN") or ""
-
-    if not token:
-        raise Exception("Configure DISCORD_TOKEN nas variáveis de ambiente.")
-
-    log(f"🤖 Iniciando bot...")
-    log(f"📋 Token: {token[:20]}...{token[-10:]}")
-
-    # Usar o bot principal que já tem todos os comandos registrados
-    await bot.start(token, reconnect=True)
+    """Roda múltiplos bots em paralelo usando tokens diferentes"""
+    # Busca TODOS os tokens disponíveis
+    tokens = []
+    
+    # Verifica tokens numerados (DISCORD_TOKEN_1, DISCORD_TOKEN_2, etc)
+    for i in range(1, 11):  # Suporta até 10 tokens
+        token = os.getenv(f"DISCORD_TOKEN_{i}") or os.getenv(f"TOKEN_{i}")
+        if token:
+            tokens.append((f"Bot #{i}", token))
+    
+    # Fallback para TOKEN ou DISCORD_TOKEN genérico
+    generic_token = os.getenv("TOKEN") or os.getenv("DISCORD_TOKEN")
+    if generic_token and not any(t[1] == generic_token for t in tokens):
+        tokens.append(("Bot Principal", generic_token))
+    
+    if not tokens:
+        raise Exception("Configure pelo menos um DISCORD_TOKEN nas variáveis de ambiente.")
+    
+    log(f"🤖 Modo Multi-Bot: {len(tokens)} token(s) encontrado(s)")
+    
+    # Se há apenas 1 token, usa o bot principal diretamente
+    if len(tokens) == 1:
+        name, token = tokens[0]
+        log(f"📋 {name}: {token[:20]}...{token[-10:]}")
+        log(f"🚀 Iniciando {name}...")
+        await bot.start(token, reconnect=True)
+        return
+    
+    # MÚLTIPLOS BOTS: Cria instâncias separadas para cada token
+    log("⚠️ AVISO: Rodando múltiplos bots simultaneamente")
+    log("💡 Certifique-se de que cada token pertence a um BOT DIFERENTE (aplicações Discord separadas)")
+    log("💡 Se usar o mesmo bot em múltiplos tokens, haverá problemas de sessão!")
+    
+    async def create_bot_instance(name: str, token: str):
+        """Cria e roda uma instância de bot independente"""
+        new_bot = commands.Bot(
+            command_prefix="!",
+            intents=intents,
+            chunk_guilds_at_startup=False,
+            member_cache_flags=discord.MemberCacheFlags.none(),
+            max_messages=10
+        )
+        
+        # Copia os comandos slash do bot principal para o novo bot
+        for cmd in bot.tree.get_commands():
+            new_bot.tree.add_command(cmd)
+        
+        # Registra event handlers
+        @new_bot.event
+        async def on_ready():
+            log("=" * 50)
+            log(f"✅ {name} CONECTADO AO DISCORD!")
+            log("=" * 50)
+            log(f'👤 Usuário: {new_bot.user}')
+            log(f'📛 Nome: {new_bot.user.name}')
+            log(f'🆔 ID: {new_bot.user.id}')
+            log(f'🌐 Servidores: {len(new_bot.guilds)}')
+            
+            # Sincroniza comandos
+            try:
+                synced = await new_bot.tree.sync(guild=None)
+                log(f'✅ {len(synced)} comandos sincronizados para {name}')
+            except Exception as e:
+                log(f'⚠️ Erro ao sincronizar comandos de {name}: {e}')
+            
+            # Registra views persistentes
+            new_bot.add_view(QueueButton(mode="", bet_value=0, mediator_fee=0, currency_type="sonhos"))
+            new_bot.add_view(ConfirmPaymentButton(bet_id=""))
+        
+        @new_bot.event
+        async def on_message_delete(message):
+            await bot.on_message_delete(message)
+        
+        @new_bot.event
+        async def on_guild_join(guild):
+            await bot.on_guild_join(guild)
+        
+        log(f"🚀 Iniciando {name}...")
+        await new_bot.start(token, reconnect=True)
+    
+    # Inicia todos os bots em paralelo
+    tasks = []
+    for name, token in tokens:
+        log(f"📋 {name}: {token[:20]}...{token[-10:]}")
+        tasks.append(create_bot_instance(name, token))
+    
+    # Aguarda todos rodarem juntos
+    await asyncio.gather(*tasks)
 
 try:
     if IS_FLYIO:
@@ -2666,13 +2846,21 @@ try:
 
         asyncio.run(run_all())
     else:
-        log("Iniciando bots no Replit/Local com servidor HTTP...")
-
+        log("=" * 60)
+        log("💻 INICIANDO NO REPLIT/LOCAL")
+        log("=" * 60)
+        
         async def run_replit():
             # Iniciar servidor web primeiro
+            log("📡 Iniciando servidor HTTP...")
             await start_web_server()
             await asyncio.sleep(1)
-            # No Replit, pode rodar múltiplos bots se necessário
+            log("✅ Servidor HTTP rodando")
+            
+            # No Replit, roda TODOS os bots disponíveis
+            log("🤖 Replit: Modo Multi-Bot")
+            log("💡 Configure DISCORD_TOKEN_1, DISCORD_TOKEN_2, etc.")
+            log("🚀 Iniciando bots Discord em paralelo...")
             await run_multiple_bots()
 
         asyncio.run(run_replit())
