@@ -7,19 +7,7 @@ import random
 import asyncio
 from datetime import datetime
 from models.bet import Bet
-import os as _db_os
-if _db_os.getenv("DATABASE_URL"):
-    try:
-        from utils.database_hybrid import HybridDatabase as Database
-        _using_postgres = True
-    except Exception as e:
-        import logging as _db_logging
-        _db_logging.getLogger('bot').warning(f"⚠️ Erro ao carregar PostgreSQL, usando JSON: {e}")
-        from utils.database import Database
-        _using_postgres = False
-else:
-    from utils.database import Database
-    _using_postgres = False
+from utils.database import Database
 from aiohttp import web
 
 # Forçar logs para stdout sem buffer (ESSENCIAL para Fly.io)
@@ -347,17 +335,13 @@ class QueueButton(discord.ui.View):
         log(f"🔍 Buscando metadados para mensagem {interaction.message.id}")
 
         try:
-            all_metadata = db.get_all_queue_metadata()
-            log(f"📊 Total de metadados no banco: {len(all_metadata)}")
-            log(f"📊 Message IDs disponíveis: {list(all_metadata.keys())}")
-            
+            log(f"📊 Metadados disponíveis: {list(db.get_all_queue_metadata().keys())}")
             metadata = db.get_queue_metadata(interaction.message.id)
         except Exception as e:
             log(f"❌ ERRO ao buscar metadados: {e}")
             logger.exception("Stacktrace completo:")
             await interaction.followup.send(
-                "⚠️ Erro ao acessar dados da fila.\n\n"
-                "**Solução:** Peça ao mediador para criar uma nova fila com `/mostrar-fila`",
+                "Erro ao acessar dados da fila. Tente novamente em alguns segundos.",
                 ephemeral=True
             )
             return
@@ -370,16 +354,11 @@ class QueueButton(discord.ui.View):
             currency_type = metadata.get('currency_type', 'sonhos')
             log(f"✅ Metadados encontrados: queue_id={queue_id}, bet_value={bet_value}, mediator_fee={mediator_fee}, currency={currency_type}")
         else:
-            # CRÍTICO: Se não encontrou metadados, NÃO deleta a mensagem (pode ser temporário)
+            # CRÍTICO: Se não encontrou metadados, aborta (não usa valores zero!)
             log(f"❌ ERRO: Metadados não encontrados para mensagem {interaction.message.id}")
-            log(f"📋 Message IDs no banco: {list(db.get_all_queue_metadata().keys())}")
-            log(f"⚠️ Pode ser problema de sincronização entre PostgreSQL e JSON")
-            
+            log(f"📋 Metadados disponíveis no banco: {list(db.get_all_queue_metadata().keys())}")
             await interaction.followup.send(
-                "⚠️ Esta fila está temporariamente indisponível.\n\n"
-                "**Possíveis soluções:**\n"
-                "1. Aguarde alguns segundos e tente novamente\n"
-                "2. Se persistir, peça ao mediador para criar uma nova fila com `/mostrar-fila`",
+                "Erro: Esta fila não está mais disponível. Por favor, peça ao mediador para criar uma nova fila com /mostrar-fila.",
                 ephemeral=True
             )
             return
@@ -575,21 +554,8 @@ class QueueButton(discord.ui.View):
             queue_id = metadata['queue_id']
             log(f"✅ Metadados encontrados: queue_id={queue_id}")
         else:
-            log(f"❌ Metadados não encontrados para mensagem {interaction.message.id}")
-            
-            # Tenta deletar a mensagem de painel inválida
-            try:
-                await interaction.message.delete()
-                log(f"🗑️ Mensagem de painel inválida deletada automaticamente")
-            except:
-                pass
-            
-            await interaction.response.send_message(
-                "⚠️ Esta fila expirou e foi removida.\n\n"
-                "**Por favor, peça ao mediador para criar uma nova fila com `/mostrar-fila`**",
-                ephemeral=True
-            )
-            return
+            queue_id = self.queue_id
+            log(f"⚠️ Metadados não encontrados, usando self.queue_id={queue_id}")
 
         queue = db.get_queue(queue_id)
         log(f"📊 Fila {queue_id} atual: {queue}")
@@ -1037,8 +1003,8 @@ async def cleanup_expired_queues():
 
     while not bot.is_closed():
         try:
-            # Busca jogadores expirados (mais de 10 minutos na fila - aumentado para evitar remoções prematuras)
-            expired_players = db.get_expired_queue_players(timeout_minutes=10)
+            # Busca jogadores expirados (mais de 5 minutos na fila)
+            expired_players = db.get_expired_queue_players(timeout_minutes=5)
 
             if expired_players:
                 log(f"🧹 Encontrados jogadores expirados em {len(expired_players)} filas")
@@ -1047,16 +1013,26 @@ async def cleanup_expired_queues():
                     # Remove cada jogador expirado
                     for user_id in user_ids:
                         db.remove_from_queue(queue_id, user_id)
-                        log(f"⏱️ Removido usuário {user_id} da fila {queue_id} (timeout de 10 min)")
+                        log(f"⏱️ Removido usuário {user_id} da fila {queue_id} (timeout)")
                     
                     # Log para debug: mostra estado da fila após remoções
                     updated_queue = db.get_queue(queue_id)
                     log(f"🔍 Fila {queue_id} após remoções: {len(updated_queue)} jogadores")
 
-                    # NÃO deleta filas vazias automaticamente - mantém metadados
-                    # Isso evita que filas fiquem "inválidas" após limpeza
+                    # Limpa filas completamente vazias e seu metadata
                     if not updated_queue:
-                        log(f"ℹ️ Fila {queue_id} vazia mas mantida (painel ainda existe)")
+                        # Extrai message_id do queue_id (formato: "mode_message_id")
+                        parts = queue_id.split('_')
+                        if len(parts) >= 2:
+                            try:
+                                message_id = int(parts[-1])
+                                db.delete_queue_metadata(message_id)
+                                # Limpa do dicionário em memória (previne memory leak)
+                                if queue_id in queue_messages:
+                                    del queue_messages[queue_id]
+                                log(f"🧹 Metadata e memória limpos para fila vazia {queue_id}")
+                            except ValueError:
+                                pass
 
                     # Atualiza a mensagem da fila se possível
                     if queue_id in queue_messages:
@@ -1167,12 +1143,15 @@ async def on_ready():
 
     try:
         log("🔄 Sincronizando comandos slash...")
+        # Limpa comandos antigos primeiro (importante após mudanças)
+        bot.tree.clear_commands(guild=None)
         # Sincroniza globalmente (incluindo DM) - None = global
         synced_global = await bot.tree.sync(guild=None)
         log(f'✅ {len(synced_global)} comandos sincronizados globalmente (DM incluída)')
         for cmd in synced_global:
             log(f'  - /{cmd.name}')
-        log('⏰ Comandos podem demorar até 1 hora para aparecer em DM (cache do Discord)')
+        log('⏰ Comandos podem demorar até 1 hora para aparecer no Discord (cache)')
+        log('💡 Se comandos não aparecerem, use Ctrl+R no Discord para limpar cache')
     except Exception as e:
         log(f'⚠️ Erro ao sincronizar comandos: {e}')
         logger.exception("Stacktrace:")
@@ -1191,31 +1170,6 @@ async def on_ready():
     else:
         log('ℹ️ Views persistentes já estavam registradas')
 
-    # Migrar metadados do JSON para PostgreSQL (se estiver usando híbrido)
-    if _using_postgres and not hasattr(bot, '_metadata_migrated'):
-        log('🔄 Migrando metadados JSON -> PostgreSQL...')
-        json_metadata = db._json_db.get_all_queue_metadata()
-        migrated = 0
-        for message_id_str, metadata in json_metadata.items():
-            try:
-                message_id = int(message_id_str)
-                # Verifica se já existe no PostgreSQL
-                if not db._pg_db.get_queue_metadata(message_id):
-                    db._pg_db.save_queue_metadata(
-                        message_id,
-                        metadata['mode'],
-                        metadata['bet_value'],
-                        metadata['mediator_fee'],
-                        metadata['channel_id'],
-                        metadata.get('currency_type', 'sonhos')
-                    )
-                    migrated += 1
-            except Exception as e:
-                log(f'⚠️ Erro ao migrar metadata {message_id_str}: {e}')
-        if migrated > 0:
-            log(f'✅ {migrated} metadados migrados para PostgreSQL')
-        bot._metadata_migrated = True
-    
     # Recuperar metadados de filas existentes após restart
     if not hasattr(bot, '_queue_metadata_recovered'):
         log('🔄 Recuperando metadados de filas existentes...')
@@ -1274,25 +1228,27 @@ async def on_ready():
                 log(f"✅ Assinatura permanente automática criada para {auto_guild.name}")
         bot._auto_authorized_setup = True
     
-    # Auto-autoriza servidores onde o bot já está (apenas na primeira vez)
+    # Verifica servidores sem assinatura (apenas na primeira vez)
     if not hasattr(bot, '_initial_guild_check'):
         log('🔍 Verificando autorização dos servidores atuais...')
-        auto_authorized_count = 0
+        unauthorized_guilds = []
         for guild in bot.guilds:
-            # Pula o servidor auto-autorizado (já configurado acima)
+            # Pula o servidor auto-autorizado
             if guild.id == AUTO_AUTHORIZED_GUILD_ID:
                 continue
             
             if not db.is_subscription_active(guild.id):
-                # Auto-autoriza o servidor com assinatura permanente
-                db.create_subscription(guild.id, None)
-                log(f"✅ Servidor auto-autorizado: {guild.name} ({guild.id})")
-                auto_authorized_count += 1
+                log(f"⚠️ Servidor sem assinatura detectado: {guild.name} ({guild.id})")
+                unauthorized_guilds.append(guild)
         
-        if auto_authorized_count > 0:
-            log(f"🔓 {auto_authorized_count} servidor(es) auto-autorizado(s)")
+        # Processa servidores não autorizados com delay para evitar rate limiting
+        async def process_unauthorized_guilds():
+            for i, guild in enumerate(unauthorized_guilds):
+                await ensure_guild_authorized(guild)
+                # Aguarda 2 segundos entre cada remoção para evitar rate limit
+                if i < len(unauthorized_guilds) - 1:
+                    await asyncio.sleep(2)
         
-        unauthorized_guilds = []
         if unauthorized_guilds:
             bot.loop.create_task(process_unauthorized_guilds())
         
@@ -1932,79 +1888,6 @@ async def sair_todas_filas(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
-@bot.tree.command(name="verificar-filas", description="[MEDIADOR] Verificar status de todas as filas ativas")
-async def verificar_filas(interaction: discord.Interaction):
-    """Mostra o status de todas as filas e metadados para debug"""
-    # Verifica se tem o cargo de mediador
-    mediator_role_id = db.get_mediator_role(interaction.guild.id)
-    has_mediator_role = mediator_role_id and discord.utils.get(interaction.user.roles, id=mediator_role_id) is not None
-    
-    if not has_mediator_role:
-        if mediator_role_id:
-            await interaction.response.send_message(
-                f"Você precisa ter o cargo <@&{mediator_role_id}> para usar este comando.",
-                ephemeral=True
-            )
-        else:
-            await interaction.response.send_message(
-                "Este servidor ainda não configurou um cargo de mediador.\n"
-                "Um administrador deve usar /setup @cargo para configurar.",
-                ephemeral=True
-            )
-        return
-    
-    await interaction.response.defer(ephemeral=True)
-    
-    all_metadata = db.get_all_queue_metadata()
-    
-    if not all_metadata:
-        await interaction.followup.send(
-            "✅ Nenhuma fila ativa no momento.",
-            ephemeral=True
-        )
-        return
-    
-    embed = discord.Embed(
-        title="📊 Status das Filas",
-        description=f"Total de filas: {len(all_metadata)}",
-        color=EMBED_COLOR
-    )
-    
-    for message_id_str, metadata in all_metadata.items():
-        queue_id = metadata['queue_id']
-        channel_id = metadata['channel_id']
-        mode = metadata['mode']
-        
-        # Busca a fila atual
-        current_queue = db.get_queue(queue_id)
-        queue_size = len(current_queue)
-        
-        # Verifica se a mensagem ainda existe
-        channel = interaction.guild.get_channel(channel_id)
-        message_exists = "❌ Canal não encontrado"
-        if channel:
-            try:
-                message = await channel.fetch_message(int(message_id_str))
-                message_exists = "✅ Painel ativo"
-            except discord.NotFound:
-                message_exists = "❌ Mensagem deletada"
-            except:
-                message_exists = "⚠️ Erro ao verificar"
-        
-        embed.add_field(
-            name=f"{mode.replace('-', ' ').title()}",
-            value=(
-                f"Message ID: `{message_id_str}`\n"
-                f"Jogadores: {queue_size}/2\n"
-                f"Status: {message_exists}"
-            ),
-            inline=False
-        )
-    
-    embed.set_footer(text=CREATOR_FOOTER)
-    await interaction.followup.send(embed=embed, ephemeral=True)
-
-
 @bot.tree.command(name="desbugar-filas", description="[ADMIN] Cancelar todas as apostas ativas e limpar filas")
 async def desbugar_filas(interaction: discord.Interaction):
     if not interaction.user.guild_permissions.administrator:
@@ -2284,8 +2167,7 @@ async def criar_assinatura(
     servidor_id: str,
     duracao: str
 ):
-    """Cria assinatura para um servidor (ex: 30d para 30 dias, 60s para 60 segundos)
-    Se o servidor tiver assinatura permanente, ela será cancelada."""
+    """Cria assinatura para um servidor (ex: 30d para 30 dias, 60s para 60 segundos)"""
     if not is_creator(interaction.user.id):
         await interaction.response.send_message("❌ Apenas o criador do bot pode usar este comando.", ephemeral=True)
         return
@@ -2318,11 +2200,7 @@ async def criar_assinatura(
         await interaction.response.send_message("❌ Formato inválido. Use: 30d (dias) ou 60s (segundos)", ephemeral=True)
         return
     
-    # Verifica se já tem assinatura permanente
-    existing_sub = db.get_subscription(guild_id)
-    was_permanent = existing_sub and existing_sub.get('permanent')
-    
-    # Cria a assinatura temporária (substitui a permanente se existir)
+    # Cria a assinatura
     db.create_subscription(guild_id, duration_seconds)
     
     # Calcula a data de expiração
@@ -2334,24 +2212,12 @@ async def criar_assinatura(
         description=f"Assinatura criada para o servidor ID: `{guild_id}`",
         color=0x00FF00
     )
-    
-    if was_permanent:
-        embed.add_field(
-            name="⚠️ Atenção", 
-            value="Assinatura permanente foi substituída por esta assinatura temporária",
-            inline=False
-        )
-    
     embed.add_field(name="Duração", value=duracao, inline=True)
     embed.add_field(name="Expira em", value=expires_at.strftime('%d/%m/%Y %H:%M:%S'), inline=True)
     embed.set_footer(text=CREATOR_FOOTER)
     
     await interaction.response.send_message(embed=embed, ephemeral=True)
-    
-    if was_permanent:
-        log(f"📝 Assinatura permanente substituída por temporária ({duration_seconds}s) para guild {guild_id}")
-    else:
-        log(f"📝 Assinatura criada para guild {guild_id} por {duration_seconds}s")
+    log(f"📝 Assinatura criada para guild {guild_id} por {duration_seconds}s")
 
 
 @bot.tree.command(name="assinatura-permanente", description="[CRIADOR] Criar assinatura permanente para um servidor")
@@ -2518,7 +2384,7 @@ async def aviso_do_dev(
     canal_id: str,
     mensagem: str
 ):
-    """Envia uma mensagem em um canal específico e menciona o cargo de mediador"""
+    """Envia uma mensagem em um canal específico"""
     if not is_creator(interaction.user.id):
         await interaction.response.send_message("❌ Apenas o criador do bot pode usar este comando.", ephemeral=True)
         return
@@ -2549,17 +2415,7 @@ async def aviso_do_dev(
         )
         embed.set_footer(text=CREATOR_FOOTER)
         
-        # Verifica se há cargo de mediador configurado para marcar
-        mediator_role_id = db.get_mediator_role(channel.guild.id)
-        mention_text = ""
-        
-        if mediator_role_id:
-            role = channel.guild.get_role(mediator_role_id)
-            if role:
-                mention_text = f"{role.mention} "
-        
-        # Envia com menção ao cargo de mediador (se houver)
-        await channel.send(content=mention_text, embed=embed)
+        await channel.send(embed=embed)
         
         await interaction.response.send_message(f"✅ Mensagem enviada para {channel.mention}", ephemeral=True)
         log(f"📢 Aviso do dev enviado para canal {channel.name} ({channel.id})")
@@ -2668,12 +2524,24 @@ async def dashboard(request):
 
 async def health_check(request):
     """Endpoint de healthcheck para Fly.io/Railway"""
-    bot_status = "online" if bot.is_ready() else "starting"
-    return web.Response(
-        text=f"Bot Status: {bot_status}\nUptime: OK", 
-        status=200,
-        headers={'Content-Type': 'text/plain'}
-    )
+    try:
+        bot_status = "online" if bot.is_ready() else "starting"
+        guild_count = len(bot.guilds) if bot.is_ready() else 0
+        
+        response_text = f"Bot Status: {bot_status}\nGuilds: {guild_count}\nUptime: OK"
+        
+        return web.Response(
+            text=response_text, 
+            status=200,
+            headers={'Content-Type': 'text/plain'}
+        )
+    except Exception as e:
+        log(f"⚠️ Erro no health check: {e}")
+        return web.Response(
+            text=f"Error: {str(e)}", 
+            status=500,
+            headers={'Content-Type': 'text/plain'}
+        )
 
 async def ping(request):
     """Endpoint simples de ping"""
@@ -2739,72 +2607,18 @@ async def run_bot_single():
     await bot.start(token, reconnect=True)
 
 async def run_multiple_bots():
-    """Roda múltiplos bots em paralelo (até 3 tokens)"""
-    # Coletar todos os tokens disponíveis
-    tokens = []
-    
-    # Verificar DISCORD_TOKEN_1, DISCORD_TOKEN_2, DISCORD_TOKEN_3
-    for i in range(1, 4):
-        token = os.getenv(f"DISCORD_TOKEN_{i}")
-        if token:
-            tokens.append((i, token))
-    
-    # Se não encontrou nenhum, tentar DISCORD_TOKEN ou TOKEN
-    if not tokens:
-        token = os.getenv("DISCORD_TOKEN") or os.getenv("TOKEN")
-        if token:
-            tokens.append((1, token))
-    
-    if not tokens:
-        raise Exception("Configure pelo menos um token: DISCORD_TOKEN, DISCORD_TOKEN_1, DISCORD_TOKEN_2 ou DISCORD_TOKEN_3")
-    
-    log(f"🤖 Encontrados {len(tokens)} token(s) para iniciar")
-    
-    # Se só tem 1 token, usar o bot principal
-    if len(tokens) == 1:
-        token_id, token = tokens[0]
-        log(f"🤖 Iniciando bot único...")
-        log(f"📋 Token {token_id}: {token[:20]}...{token[-10:]}")
-        await bot.start(token, reconnect=True)
-        return
-    
-    # Se tem múltiplos tokens, criar instâncias separadas
-    log(f"🚀 Modo múltiplos bots: {len(tokens)} instâncias")
-    
-    async def start_bot_instance(bot_id, token):
-        """Inicia uma instância de bot com um token específico"""
-        try:
-            # Criar nova instância do bot com as mesmas configurações
-            bot_instance = commands.Bot(
-                command_prefix="!",
-                intents=intents,
-                chunk_guilds_at_startup=False,
-                member_cache_flags=discord.MemberCacheFlags.none(),
-                max_messages=10
-            )
-            
-            log(f"🤖 Bot {bot_id}: Iniciando...")
-            log(f"📋 Bot {bot_id} Token: {token[:20]}...{token[-10:]}")
-            
-            # Copiar todos os eventos e comandos do bot principal para esta instância
-            # Registrar evento on_ready
-            @bot_instance.event
-            async def on_ready():
-                log(f"✅ Bot {bot_id} conectado: {bot_instance.user.name}#{bot_instance.user.discriminator}")
-            
-            # Nota: Os comandos slash precisariam ser registrados em cada instância
-            # Por simplicidade, cada bot terá os mesmos comandos do bot principal
-            # mas como são instâncias separadas, cada uma terá seu próprio estado
-            
-            await bot_instance.start(token, reconnect=True)
-            
-        except Exception as e:
-            log(f"❌ Erro no Bot {bot_id}: {e}")
-            logger.exception(f"Stacktrace Bot {bot_id}:")
-    
-    # Iniciar todos os bots em paralelo
-    tasks = [start_bot_instance(bot_id, token) for bot_id, token in tokens]
-    await asyncio.gather(*tasks, return_exceptions=True)
+    """Roda o bot com o primeiro token disponível"""
+    # Pegar o primeiro token disponível
+    token = os.getenv("TOKEN") or os.getenv("DISCORD_TOKEN_1") or os.getenv("DISCORD_TOKEN") or ""
+
+    if not token:
+        raise Exception("Configure DISCORD_TOKEN nas variáveis de ambiente.")
+
+    log(f"🤖 Iniciando bot...")
+    log(f"📋 Token: {token[:20]}...{token[-10:]}")
+
+    # Usar o bot principal que já tem todos os comandos registrados
+    await bot.start(token, reconnect=True)
 
 try:
     if IS_FLYIO:
@@ -2822,11 +2636,15 @@ try:
             await asyncio.sleep(1)
             log("✅ Servidor HTTP rodando")
 
-            # No Fly.io, suporta múltiplos bots (até 3)
-            log("🤖 Fly.io: Modo múltiplos bots")
-            log("💡 Configure DISCORD_TOKEN_1, DISCORD_TOKEN_2, DISCORD_TOKEN_3")
-            log("🚀 Iniciando bots Discord...")
-            await run_multiple_bots()
+            # No Fly.io, rodar APENAS 1 bot para evitar invalidação de sessão
+            token = os.getenv("DISCORD_TOKEN") or os.getenv("TOKEN") or os.getenv("DISCORD_TOKEN_1") or ""
+            if not token:
+                raise Exception("Configure DISCORD_TOKEN nas variáveis de ambiente")
+
+            log("🤖 Fly.io: Modo SINGLE BOT (evita invalidação de sessão)")
+            log(f"📋 Token: {token[:20]}...{token[-10:]}")
+            log("🚀 Iniciando bot Discord...")
+            await bot.start(token, reconnect=True)
 
         asyncio.run(run_flyio())
 
