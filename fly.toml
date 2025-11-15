@@ -1,46 +1,23 @@
-app = "botss"
-primary_region = "gru"
-kill_signal = "SIGINT"
-kill_timeout = "5s"
+# fly.toml app configuration file generated for botss-brclzg on 2025-11-15T19:30:43Z
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = 'botss-brclzg'
+primary_region = 'gru'
 
 [build]
 
-[env]
-  PYTHONUNBUFFERED = "1"
-  PYTHONDONTWRITEBYTECODE = "1"
-  PORT = "8080"
-
-[experimental]
-  auto_rollback = false
-
-[deploy]
-  strategy = "immediate"
-
-[[services]]
+[http_service]
   internal_port = 8080
-  protocol = "tcp"
-  auto_stop_machines = false
-  auto_start_machines = false
-  min_machines_running = 1
-
-  [[services.ports]]
-    handlers = ["http"]
-    port = 80
-    force_https = true
-
-  [[services.ports]]
-    handlers = ["tls", "http"]
-    port = 443
-
-  [[services.http_checks]]
-    interval = "30s"
-    timeout = "10s"
-    grace_period = "10s"
-    method = "GET"
-    path = "/ping"
-    protocol = "http"
+  force_https = true
+  auto_stop_machines = 'stop'
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ['app']
 
 [[vm]]
-  memory = "1gb"
-  cpu_kind = "shared"
+  memory = '1gb'
+  cpu_kind = 'shared'
   cpus = 1
+  memory_mb = 256
