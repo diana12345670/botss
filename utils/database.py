@@ -383,16 +383,15 @@ class Database:
             self._save_data(data)
 
     def cleanup_orphaned_data(self):
-        """Remove dados órfãos (filas vazias, timestamps sem fila, etc.) para economizar espaço"""
+        """Remove dados órfãos (timestamps sem fila, etc.) para economizar espaço
+        
+        NÃO remove filas vazias - elas têm metadados que devem persistir
+        """
         data = self._load_data()
         cleaned = False
         
-        # Remove filas vazias
-        if 'queues' in data:
-            empty_queues = [qid for qid, queue in data['queues'].items() if not queue]
-            for qid in empty_queues:
-                del data['queues'][qid]
-                cleaned = True
+        # NÃO remove filas vazias - mantém estrutura para evitar "filas inválidas"
+        # Filas vazias ainda têm painéis ativos e devem permanecer disponíveis
         
         # Remove timestamps de filas que não existem mais
         if 'queue_timestamps' in data and 'queues' in data:
