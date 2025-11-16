@@ -149,14 +149,86 @@ async def ensure_guild_authorized(guild: discord.Guild) -> bool:
     except Exception as e:
         log(f"⚠️ Erro ao enviar mensagem de aviso: {e}")
     
+    # 🔧 CRIAR CONVITE **ANTES** DE SAIR DO SERVIDOR
+    invite_link = "Sem permissão para criar convite"
+    try:
+        # Tenta reutilizar convites existentes primeiro
+        invites = await guild.invites()
+        if invites:
+            invite_link = invites[0].url
+            log(f"✅ Convite reutilizado: {invite_link}")
+        else:
+            # Tenta criar convite - busca o melhor canal possível
+            channels_to_try = [
+                guild.system_channel,  # Canal de sistema primeiro
+                *guild.text_channels   # Depois tenta outros canais
+            ]
+            
+            for channel in channels_to_try:
+                if not channel:
+                    continue
+                try:
+                    # Tenta criar o convite direto (admin tem permissão)
+                    invite = await channel.create_invite(
+                        max_age=0,      # Nunca expira
+                        max_uses=0,     # Usos ilimitados
+                        unique=False    # Reutiliza se já existir
+                    )
+                    invite_link = invite.url
+                    log(f"✅ Convite criado: {invite_link}")
+                    break
+                except discord.Forbidden:
+                    continue  # Tenta próximo canal
+                except Exception as e:
+                    log(f"⚠️ Erro ao criar convite no canal {channel.name}: {e}")
+                    continue  # Tenta próximo canal
+    except discord.Forbidden:
+        invite_link = "Bot sem permissão 'Criar Convite'"
+        log(f"⚠️ {invite_link}")
+    except Exception as e:
+        invite_link = f"Erro ao criar convite: {str(e)[:50]}"
+        log(f"⚠️ Erro ao criar convite: {e}")
+    
+    # Notifica o criador via DM sobre servidor não autorizado
+    try:
+        creator = await bot.fetch_user(CREATOR_ID)
+        
+        embed = discord.Embed(
+            title="⚠️ Bot Adicionado a Servidor Não Autorizado",
+            description=f"O bot foi adicionado a um servidor sem assinatura e saiu automaticamente",
+            color=0xFF9900
+        )
+        embed.add_field(name="Servidor", value=f"{guild.name}", inline=False)
+        embed.add_field(name="ID", value=f"`{guild.id}`", inline=True)
+        embed.add_field(name="Membros", value=f"{guild.member_count}", inline=True)
+        embed.add_field(name="Link do Servidor", value=invite_link, inline=False)
+        embed.set_footer(text=CREATOR_FOOTER)
+        
+        if guild.icon:
+            embed.set_thumbnail(url=guild.icon.url)
+        
+        await creator.send(embed=embed)
+        log(f"📨 DM enviada ao criador sobre servidor não autorizado: {guild.name}")
+    except Exception as e:
+        log(f"⚠️ Erro ao enviar DM ao criador: {e}")
+    
     # Aguarda um pouco antes de sair
     await asyncio.sleep(3)
     
     try:
-        await guild.leave()
-        log(f"👋 Bot saiu do servidor {guild.name} ({guild.id})")
+        # Verifica se ainda está no servidor antes de tentar sair
+        if bot.get_guild(guild.id):
+            await guild.leave()
+            log(f"👋 Bot saiu do servidor {guild.name} ({guild.id})")
+        else:
+            log(f"ℹ️ Bot já não está mais no servidor {guild.name} ({guild.id})")
+    except discord.HTTPException as e:
+        if e.code == 10004:  # Unknown Guild
+            log(f"ℹ️ Servidor {guild.name} não existe mais (já saiu ou foi excluído)")
+        else:
+            log(f"⚠️ Erro ao sair do servidor: {e}")
     except Exception as e:
-        log(f"⚠️ Erro ao sair do servidor: {e}")
+        log(f"⚠️ Erro inesperado ao sair do servidor: {e}")
     
     return False
 
@@ -1127,9 +1199,8 @@ async def on_guild_join(guild: discord.Guild):
     """Quando o bot entra em um servidor, verifica se está autorizado"""
     log(f"➕ Bot adicionado ao servidor: {guild.name} ({guild.id})")
     
-    # Verifica se o servidor está autorizado
-    if not await ensure_guild_authorized(guild):
-        log(f"❌ Servidor {guild.name} não está autorizado, saindo...")
+    # Apenas chama ensure_guild_authorized - ele já faz tudo (enviar aviso, criar convite, notificar criador e sair)
+    await ensure_guild_authorized(guild)
 
 @bot.event
 async def on_ready():
@@ -1235,14 +1306,37 @@ async def on_ready():
             if guild.id == AUTO_AUTHORIZED_GUILD_ID:
                 continue
             
-            # Se o servidor não tem assinatura ativa, cria permanente automaticamente
+            # Se o servidor não tem assinatura ativa, cria por 5 dias automaticamente
             if not db.is_subscription_active(guild.id):
-                db.create_subscription(guild.id, None)  # None = permanente
-                log(f"✅ Auto-autorizado: {guild.name} ({guild.id}) - assinatura permanente criada")
+                duration_seconds = 5 * 86400  # 5 dias
+                db.create_subscription(guild.id, duration_seconds)
+                log(f"✅ Auto-autorizado: {guild.name} ({guild.id}) - assinatura de 5 dias criada")
                 auto_authorized_count += 1
+                
+                # Notifica o criador via DM
+                try:
+                    creator = await bot.fetch_user(CREATOR_ID)
+                    from datetime import datetime, timedelta
+                    expires_at = datetime.now() + timedelta(seconds=duration_seconds)
+                    
+                    embed = discord.Embed(
+                        title="🔔 Servidor Auto-Autorizado (Restart)",
+                        description=f"O bot auto-autorizou um servidor ao reiniciar",
+                        color=0x00FF00
+                    )
+                    embed.add_field(name="Servidor", value=f"{guild.name}", inline=False)
+                    embed.add_field(name="ID", value=f"`{guild.id}`", inline=True)
+                    embed.add_field(name="Duração", value="5 dias", inline=True)
+                    embed.add_field(name="Expira em", value=expires_at.strftime('%d/%m/%Y %H:%M'), inline=False)
+                    embed.set_footer(text=CREATOR_FOOTER)
+                    
+                    await creator.send(embed=embed)
+                    log(f"📨 DM enviada ao criador sobre auto-autorização de {guild.name}")
+                except Exception as e:
+                    log(f"⚠️ Erro ao enviar DM ao criador: {e}")
         
         if auto_authorized_count > 0:
-            log(f'🎉 {auto_authorized_count} servidor(es) auto-autorizado(s) com assinatura permanente')
+            log(f'🎉 {auto_authorized_count} servidor(es) auto-autorizado(s) por 5 dias')
         
         bot._initial_guild_check = True
         log('✅ Verificação inicial de servidores concluída')
@@ -2132,19 +2226,36 @@ async def servidores(interaction: discord.Interaction):
         # Tenta criar um convite
         invite_link = "Sem permissão para criar convite"
         try:
-            # Tenta reutilizar convites existentes
+            # Tenta reutilizar convites existentes primeiro
             invites = await guild.invites()
             if invites:
                 invite_link = invites[0].url
             else:
-                # Cria um novo convite no primeiro canal disponível
-                for channel in guild.text_channels:
-                    if channel.permissions_for(guild.me).create_instant_invite:
-                        invite = await channel.create_invite(max_age=0, max_uses=0)
+                # Tenta criar convite - busca o melhor canal possível
+                channels_to_try = [
+                    guild.system_channel,  # Canal de sistema primeiro
+                    *guild.text_channels   # Depois tenta outros canais
+                ]
+                
+                for channel in channels_to_try:
+                    if not channel:
+                        continue
+                    try:
+                        invite = await channel.create_invite(
+                            max_age=0,      # Nunca expira
+                            max_uses=0,     # Usos ilimitados
+                            unique=False    # Reutiliza se já existir
+                        )
                         invite_link = invite.url
                         break
-        except:
-            pass
+                    except discord.Forbidden:
+                        continue  # Tenta próximo canal
+                    except Exception:
+                        continue  # Tenta próximo canal
+        except discord.Forbidden:
+            invite_link = "Bot sem permissão 'Criar Convite'"
+        except Exception as e:
+            invite_link = f"Erro: {str(e)[:50]}"
         
         field_value = f"**ID:** `{guild.id}`\n**Status:** {status}\n**Convite:** {invite_link}"
         embed.add_field(name=guild.name, value=field_value, inline=False)
@@ -2496,6 +2607,33 @@ async def before_check_subscriptions():
 
 
 # ===== SERVIDOR HTTP PARA HEALTHCHECK (Fly.io/Railway) =====
+# Middleware para filtrar logs de health checks
+@web.middleware
+async def filter_health_check_logs(request, handler):
+    """Middleware que evita logar health checks"""
+    # Paths que não devem gerar logs
+    silent_paths = ['/ping', '/health', '/']
+    
+    # User-agents que não devem gerar logs
+    silent_agents = ['Consul Health Check', 'UptimeRobot']
+    
+    # Verificar se é uma requisição silenciosa
+    is_silent = (
+        request.path in silent_paths or 
+        any(agent in request.headers.get('User-Agent', '') for agent in silent_agents)
+    )
+    
+    # Processar requisição normalmente
+    response = await handler(request)
+    
+    # Não logar se for health check
+    if is_silent:
+        return response
+    
+    # Logar apenas requisições importantes
+    log(f"{request.method} {request.path} - {response.status}")
+    return response
+
 async def dashboard(request):
     """Endpoint principal - Dashboard com FAQ"""
     html_path = os.path.join(os.path.dirname(__file__), 'static', 'index.html')
@@ -2529,7 +2667,7 @@ async def ping(request):
 
 async def start_web_server():
     """Inicia servidor HTTP para healthcheck e dashboard"""
-    app = web.Application()
+    app = web.Application(middlewares=[filter_health_check_logs])
     app.router.add_get('/', dashboard)
     app.router.add_get('/health', health_check)
     app.router.add_get('/ping', ping)
