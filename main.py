@@ -929,7 +929,7 @@ class AcceptMediationButton(discord.ui.View):
             log(f"💵 Aceitando mediação de aposta em Reais (com PIX)")
             await interaction.response.send_modal(PixModal(self.bet_id))
 
-    @discord.ui.button(label='Cancelar Aposta', style=discord.ButtonStyle.red)
+    @discord.ui.button(label='Cancelar Aposta', style=discord.ButtonStyle.red, custom_id='persistent:cancel_bet')
     async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         bet = db.get_active_bet(self.bet_id)
 
@@ -1162,8 +1162,9 @@ async def on_ready():
     if not hasattr(bot, '_persistent_views_registered'):
         bot.add_view(QueueButton(mode="", bet_value=0, mediator_fee=0, currency_type="sonhos"))
         bot.add_view(ConfirmPaymentButton(bet_id=""))
+        bot.add_view(AcceptMediationButton(bet_id=""))
         bot._persistent_views_registered = True
-        log('✅ Views persistentes registradas')
+        log('✅ Views persistentes registradas (QueueButton, ConfirmPaymentButton, AcceptMediationButton)')
     else:
         log('ℹ️ Views persistentes já estavam registradas')
 
@@ -1210,12 +1211,11 @@ async def on_ready():
     else:
         log('ℹ️ Tarefas de limpeza já estavam rodando')
     
-    # Task de verificação de assinaturas agora é iniciada em run_single_bot_instance
-    # para funcionar com múltiplos bots
-    # if not hasattr(bot, '_subscription_task_started'):
-    #     check_expired_subscriptions.start()
-    #     bot._subscription_task_started = True
-    #     log('🔐 Tarefa de verificação de assinaturas iniciada')
+    # Inicia a tarefa de verificação de assinaturas (apenas uma vez)
+    if not hasattr(bot, '_subscription_task_started'):
+        check_expired_subscriptions.start()
+        bot._subscription_task_started = True
+        log('🔐 Tarefa de verificação de assinaturas iniciada')
     
     # Garante assinatura permanente do servidor auto-autorizado
     if not hasattr(bot, '_auto_authorized_setup'):
@@ -1226,29 +1226,23 @@ async def on_ready():
                 log(f"✅ Assinatura permanente automática criada para {auto_guild.name}")
         bot._auto_authorized_setup = True
     
-    # Verifica servidores sem assinatura (apenas na primeira vez)
+    # Auto-autoriza servidores existentes no restart (apenas na primeira vez)
     if not hasattr(bot, '_initial_guild_check'):
-        log('🔍 Verificando autorização dos servidores atuais...')
-        unauthorized_guilds = []
+        log('🔍 Auto-autorizando servidores onde o bot já está...')
+        auto_authorized_count = 0
         for guild in bot.guilds:
-            # Pula o servidor auto-autorizado
+            # Pula o servidor auto-autorizado (já tem lógica específica acima)
             if guild.id == AUTO_AUTHORIZED_GUILD_ID:
                 continue
             
+            # Se o servidor não tem assinatura ativa, cria permanente automaticamente
             if not db.is_subscription_active(guild.id):
-                log(f"⚠️ Servidor sem assinatura detectado: {guild.name} ({guild.id})")
-                unauthorized_guilds.append(guild)
+                db.create_subscription(guild.id, None)  # None = permanente
+                log(f"✅ Auto-autorizado: {guild.name} ({guild.id}) - assinatura permanente criada")
+                auto_authorized_count += 1
         
-        # Processa servidores não autorizados com delay para evitar rate limiting
-        async def process_unauthorized_guilds():
-            for i, guild in enumerate(unauthorized_guilds):
-                await ensure_guild_authorized(guild)
-                # Aguarda 2 segundos entre cada remoção para evitar rate limit
-                if i < len(unauthorized_guilds) - 1:
-                    await asyncio.sleep(2)
-        
-        if unauthorized_guilds:
-            bot.loop.create_task(process_unauthorized_guilds())
+        if auto_authorized_count > 0:
+            log(f'🎉 {auto_authorized_count} servidor(es) auto-autorizado(s) com assinatura permanente')
         
         bot._initial_guild_check = True
         log('✅ Verificação inicial de servidores concluída')
@@ -2592,262 +2586,18 @@ async def run_bot_single():
     log("🤖 Modo econômico: Iniciando 1 bot...")
     await bot.start(token, reconnect=True)
 
-def register_commands(target_bot):
-    """Registra todos os comandos em uma instância de bot"""
-    # Todos os comandos já estão registrados globalmente via @bot.tree.command
-    # Então eles serão automaticamente incluídos em novas instâncias
-    pass
-
-def create_bot_instance(bot_number):
-    """Cria uma nova instância de bot com as mesmas configurações e comandos"""
-    new_bot = commands.Bot(
-        command_prefix="!",
-        intents=intents,
-        chunk_guilds_at_startup=False,
-        member_cache_flags=discord.MemberCacheFlags.none(),
-        max_messages=10
-    )
-    
-    # Copiar eventos do bot principal
-    @new_bot.event
-    async def on_ready():
-        log("=" * 50)
-        log(f"✅ BOT #{bot_number} CONECTADO AO DISCORD!")
-        log("=" * 50)
-        log(f'👤 Usuário: {new_bot.user}')
-        log(f'📛 Nome: {new_bot.user.name}')
-        log(f'🆔 ID: {new_bot.user.id}')
-        log(f'🌐 Servidores: {len(new_bot.guilds)}')
-
-        try:
-            log(f"🔄 Bot #{bot_number}: Sincronizando comandos slash...")
-            synced_global = await new_bot.tree.sync(guild=None)
-            log(f'✅ Bot #{bot_number}: {len(synced_global)} comandos sincronizados globalmente')
-            for cmd in synced_global:
-                log(f'  - /{cmd.name}')
-        except Exception as e:
-            log(f'⚠️ Bot #{bot_number}: Erro ao sincronizar comandos: {e}')
-
-        # Registrar views persistentes
-        if not hasattr(new_bot, '_persistent_views_registered'):
-            new_bot.add_view(QueueButton(mode="", bet_value=0, mediator_fee=0, currency_type="sonhos"))
-            new_bot.add_view(ConfirmPaymentButton(bet_id=""))
-            new_bot._persistent_views_registered = True
-            log(f'✅ Bot #{bot_number}: Views persistentes registradas')
-
-        # Recuperar metadados de filas (cada bot compartilha o mesmo banco)
-        if not hasattr(new_bot, '_queue_metadata_recovered'):
-            log(f'🔄 Bot #{bot_number}: Recuperando metadados de filas...')
-            all_metadata = db.get_all_queue_metadata()
-            
-            active_bets = db.get_all_active_bets()
-            active_players = set()
-            for bet in active_bets.values():
-                active_players.add(bet.player1_id)
-                active_players.add(bet.player2_id)
-            
-            log(f'🧹 Bot #{bot_number}: Limpando {len(active_players)} jogadores em apostas ativas')
-            for player_id in active_players:
-                db.remove_from_all_queues(player_id)
-            
-            for message_id_str, metadata in all_metadata.items():
-                queue_id = metadata['queue_id']
-                channel_id = metadata['channel_id']
-                message_id = metadata['message_id']
-                mode = metadata['mode']
-                bet_value = metadata['bet_value']
-                queue_messages[queue_id] = (channel_id, message_id, mode, bet_value)
-                current_queue = db.get_queue(queue_id)
-                log(f'📋 Bot #{bot_number}: Fila {queue_id}: {len(current_queue)} jogadores')
-            
-            log(f'✅ Bot #{bot_number}: {len(all_metadata)} filas recuperadas')
-            new_bot._queue_metadata_recovered = True
-        
-        # Garante assinatura permanente do servidor auto-autorizado
-        if not hasattr(new_bot, '_auto_authorized_setup'):
-            auto_guild = new_bot.get_guild(AUTO_AUTHORIZED_GUILD_ID)
-            if auto_guild:
-                if not db.is_subscription_active(AUTO_AUTHORIZED_GUILD_ID):
-                    db.create_subscription(AUTO_AUTHORIZED_GUILD_ID, None)
-                    log(f"✅ Bot #{bot_number}: Assinatura permanente criada para {auto_guild.name}")
-            new_bot._auto_authorized_setup = True
-    
-    @new_bot.event
-    async def on_guild_join(guild: discord.Guild):
-        log(f"➕ Bot #{bot_number}: Adicionado ao servidor {guild.name} ({guild.id})")
-        if not await ensure_guild_authorized(guild):
-            log(f"❌ Bot #{bot_number}: Servidor {guild.name} não autorizado, saindo...")
-    
-    @new_bot.event
-    async def on_message_delete(message):
-        try:
-            metadata = db.get_queue_metadata(message.id)
-            if metadata:
-                queue_id = metadata['queue_id']
-                log(f"🗑️ Bot #{bot_number}: Mensagem de painel deletada (ID: {message.id})")
-                db.delete_queue_metadata(message.id)
-                if queue_id in queue_messages:
-                    del queue_messages[queue_id]
-                data = db._load_data()
-                if queue_id in data.get('queues', {}):
-                    del data['queues'][queue_id]
-                if queue_id in data.get('queue_timestamps', {}):
-                    del data['queue_timestamps'][queue_id]
-                db._save_data(data)
-                log(f"✅ Bot #{bot_number}: Fila {queue_id} removida")
-        except Exception as e:
-            log(f"⚠️ Bot #{bot_number}: Erro ao processar mensagem deletada: {e}")
-    
-    # Registrar todos os comandos manualmente no novo bot
-    # (Os comandos serão sincronizados no on_ready)
-    
-    return new_bot
-
-def setup_subscription_check_task(bot_instance, bot_number):
-    """Configura task de verificação de assinatura para uma instância de bot"""
-    
-    @tasks.loop(minutes=10)
-    async def check_subscriptions_for_bot():
-        """Verifica assinaturas expiradas e remove o bot dos servidores"""
-        try:
-            log(f"🔍 Bot #{bot_number}: Verificando assinaturas expiradas...")
-            
-            expired_guilds = db.get_expired_subscriptions()
-            
-            if not expired_guilds:
-                log(f"✅ Bot #{bot_number}: Nenhuma assinatura expirada")
-                return
-            
-            log(f"⚠️ Bot #{bot_number}: {len(expired_guilds)} assinatura(s) expirada(s)")
-            
-            for guild_id in expired_guilds:
-                guild = bot_instance.get_guild(guild_id)
-                if guild:
-                    log(f"⏰ Bot #{bot_number}: Assinatura expirada em {guild.name} ({guild_id})")
-                    
-                    try:
-                        # Tenta notificar o servidor
-                        channel = None
-                        if guild.system_channel and guild.system_channel.permissions_for(guild.me).send_messages:
-                            channel = guild.system_channel
-                        else:
-                            for ch in guild.text_channels:
-                                if ch.permissions_for(guild.me).send_messages:
-                                    channel = ch
-                                    break
-                        
-                        if channel:
-                            embed = discord.Embed(
-                                title="⏰ Assinatura Expirada",
-                                description="A assinatura deste servidor expirou. O bot será removido em breve.",
-                                color=0xFF9900
-                            )
-                            embed.add_field(
-                                name="📩 Para renovar:",
-                                value=(
-                                    "Fale diretamente comigo — [Discord DM](https://discord.com/users/1339336477661724674)\n"
-                                    "ou entre no meu servidor: https://discord.gg/yFhyc4RS5c"
-                                ),
-                                inline=False
-                            )
-                            embed.set_footer(text=CREATOR_FOOTER)
-                            
-                            await channel.send(embed=embed)
-                            log(f"📨 Bot #{bot_number}: Notificação enviada para {guild.name}")
-                        
-                        await asyncio.sleep(5)
-                        
-                        # Sai do servidor
-                        await guild.leave()
-                        log(f"👋 Bot #{bot_number}: Saiu de {guild.name} (assinatura expirada)")
-                        
-                    except Exception as e:
-                        log(f"⚠️ Bot #{bot_number}: Erro ao processar guild {guild_id}: {e}")
-                    
-                    # Remove a assinatura do banco (apenas o Bot #1 faz isso para evitar conflitos)
-                    if bot_number == 1:
-                        db.remove_subscription(guild_id)
-                else:
-                    # Servidor não encontrado, apenas remove a assinatura (apenas Bot #1)
-                    if bot_number == 1:
-                        db.remove_subscription(guild_id)
-                        log(f"🗑️ Bot #{bot_number}: Assinatura removida para guild {guild_id} (servidor não encontrado)")
-            
-            log(f"✅ Bot #{bot_number}: Verificação de assinaturas concluída")
-            
-        except Exception as e:
-            log(f"❌ Bot #{bot_number}: Erro ao verificar assinaturas: {e}")
-            logger.exception(f"Bot #{bot_number} Stacktrace:")
-    
-    @check_subscriptions_for_bot.before_loop
-    async def before_check():
-        """Aguarda o bot estar pronto antes de iniciar a task"""
-        await bot_instance.wait_until_ready()
-    
-    return check_subscriptions_for_bot
-
-async def run_single_bot_instance(bot_instance, token, bot_number, is_primary=False):
-    """Inicia uma única instância de bot"""
-    try:
-        log(f"🤖 Bot #{bot_number}: Iniciando...")
-        log(f"📋 Bot #{bot_number} Token: {token[:20]}...{token[-10:]}")
-        
-        if is_primary:
-            log(f"👑 Bot #{bot_number} é o bot principal (com tasks de limpeza)")
-        
-        # Configurar task de verificação de assinatura para este bot
-        subscription_task = setup_subscription_check_task(bot_instance, bot_number)
-        subscription_task.start()
-        log(f"🔐 Bot #{bot_number}: Task de verificação de assinaturas iniciada")
-        
-        await bot_instance.start(token, reconnect=True)
-    except Exception as e:
-        log(f"❌ Bot #{bot_number} falhou: {e}")
-        logger.exception(f"Stacktrace Bot #{bot_number}:")
-        raise
-
 async def run_multiple_bots():
-    """Roda múltiplos bots simultaneamente (até 3 tokens)"""
-    # Coletar todos os tokens disponíveis
-    tokens = []
-    for i in range(1, 4):  # DISCORD_TOKEN_1, DISCORD_TOKEN_2, DISCORD_TOKEN_3
-        token = os.getenv(f"DISCORD_TOKEN_{i}")
-        if token:
-            tokens.append((i, token))
-    
-    # Fallback para tokens antigos
-    if not tokens:
-        token = os.getenv("TOKEN") or os.getenv("DISCORD_TOKEN")
-        if token:
-            tokens.append((1, token))
-    
-    if not tokens:
-        raise Exception("Configure pelo menos um token: DISCORD_TOKEN_1, DISCORD_TOKEN_2 ou DISCORD_TOKEN_3")
-    
-    log(f"🔢 {len(tokens)} token(s) detectado(s)")
-    
-    # AVISO: Múltiplos bots não são recomendados no mesmo deployment
-    if len(tokens) > 1:
-        log(f"⚠️ ATENÇÃO: {len(tokens)} tokens configurados")
-        log(f"⚠️ Para múltiplos bots, crie deployments separados no Fly.io:")
-        log(f"⚠️   fly apps create botss-1")
-        log(f"⚠️   fly apps create botss-2")
-        log(f"⚠️   fly secrets set DISCORD_TOKEN=token1 -a botss-1")
-        log(f"⚠️   fly secrets set DISCORD_TOKEN=token2 -a botss-2")
-        log(f"⚠️")
-        log(f"⚠️ Usando apenas o PRIMEIRO token (DISCORD_TOKEN_1)")
-        log(f"⚠️")
-    
-    # Sempre usa apenas 1 token por deployment
-    bot_num, token = tokens[0]
-    log(f"🤖 Iniciando bot único")
+    """Roda o bot com o primeiro token disponível"""
+    # Pegar o primeiro token disponível
+    token = os.getenv("TOKEN") or os.getenv("DISCORD_TOKEN_1") or os.getenv("DISCORD_TOKEN") or ""
+
+    if not token:
+        raise Exception("Configure DISCORD_TOKEN nas variáveis de ambiente.")
+
+    log(f"🤖 Iniciando bot...")
     log(f"📋 Token: {token[:20]}...{token[-10:]}")
-    
-    # Configurar task de verificação de assinatura
-    subscription_task = setup_subscription_check_task(bot, bot_num)
-    subscription_task.start()
-    log(f"🔐 Bot #{bot_num}: Task de verificação de assinaturas iniciada")
-    
+
+    # Usar o bot principal que já tem todos os comandos registrados
     await bot.start(token, reconnect=True)
 
 try:
@@ -2888,12 +2638,6 @@ try:
                 raise Exception("Configure DISCORD_TOKEN nas variáveis de ambiente")
 
             log("🤖 Railway: Modo single bot")
-            
-            # Configurar task de verificação de assinatura
-            subscription_task = setup_subscription_check_task(bot, 1)
-            subscription_task.start()
-            log("🔐 Task de verificação de assinaturas iniciada")
-            
             await bot.start(token, reconnect=True)
 
         asyncio.run(run_all())
