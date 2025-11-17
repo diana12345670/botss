@@ -1091,69 +1091,106 @@ async def cleanup_expired_queues():
                     updated_queue = db.get_queue(queue_id)
                     log(f"🔍 Fila {queue_id} após remoções: {len(updated_queue)} jogadores")
 
-                    # Limpa filas completamente vazias e seu metadata
-                    if not updated_queue:
-                        # Extrai message_id do queue_id (formato: "mode_message_id")
-                        parts = queue_id.split('_')
-                        if len(parts) >= 2:
-                            try:
-                                message_id = int(parts[-1])
-                                db.delete_queue_metadata(message_id)
-                                # Limpa do dicionário em memória (previne memory leak)
-                                if queue_id in queue_messages:
-                                    del queue_messages[queue_id]
-                                log(f"🧹 Metadata e memória limpos para fila vazia {queue_id}")
-                            except ValueError:
-                                pass
+                    # Extrai message_id do queue_id para buscar metadados
+                    parts = queue_id.split('_')
+                    if len(parts) < 2:
+                        continue
+                    
+                    try:
+                        message_id = int(parts[-1])
+                    except ValueError:
+                        continue
 
-                    # Atualiza a mensagem da fila se possível
+                    # Busca informações da fila (de memória OU de metadados)
+                    channel_id, mode, bet_value, currency_type = None, None, None, None
+                    
                     if queue_id in queue_messages:
-                        channel_id, message_id, mode, bet_value = queue_messages[queue_id]
-                        try:
-                            channel = bot.get_channel(channel_id)
-                            if channel:
-                                message = await channel.fetch_message(message_id)
+                        # Usa dados em memória se disponíveis
+                        channel_id, message_id, mode, bet_value, currency_type = queue_messages[queue_id]
+                        log(f"📋 Usando dados em memória para {queue_id}")
+                    else:
+                        # Busca dos metadados se não estiver em memória (bot reiniciou)
+                        metadata = db.get_queue_metadata(message_id)
+                        if metadata:
+                            channel_id = metadata['channel_id']
+                            mode = metadata['mode']
+                            bet_value = metadata['bet_value']
+                            currency_type = metadata.get('currency_type', 'sonhos')
+                            # Reidrata queue_messages para próximas operações
+                            queue_messages[queue_id] = (channel_id, message_id, mode, bet_value, currency_type)
+                            log(f"🔄 Reidratado dados para {queue_id} a partir dos metadados")
+                        else:
+                            log(f"⚠️ Metadados não encontrados para {queue_id}, pulando atualização")
+                            continue
 
-                                # Verifica se é 2v2 ou 1v1
-                                is_2v2 = "2v2" in mode
+                    # PRIMEIRO atualiza o painel (mostra "Vazio" se necessário)
+                    try:
+                        channel = bot.get_channel(channel_id)
+                        if channel:
+                            message = await channel.fetch_message(message_id)
 
-                                if is_2v2:
-                                    team1_queue = db.get_queue(f"{queue_id}_team1")
-                                    team2_queue = db.get_queue(f"{queue_id}_team2")
+                            # Verifica se é 2v2 ou 1v1
+                            is_2v2 = "2v2" in mode
 
-                                    # Usa menções diretas (economiza API calls)
-                                    team1_text = "\n".join([f"<@{uid}>" for uid in team1_queue]) if team1_queue else "Nenhum jogador"
-                                    team2_text = "\n".join([f"<@{uid}>" for uid in team2_queue]) if team2_queue else "Nenhum jogador"
+                            if is_2v2:
+                                team1_queue = db.get_queue(f"{queue_id}_team1")
+                                team2_queue = db.get_queue(f"{queue_id}_team2")
 
-                                    embed = discord.Embed(
-                                        title=mode.replace('-', ' ').title(),
-                                        color=EMBED_COLOR
-                                    )
-                                    embed.add_field(name="Valor", value=format_sonhos(bet_value), inline=True)
-                                    embed.add_field(name="Time 1", value=team1_text, inline=True)
-                                    embed.add_field(name="Time 2", value=team2_text, inline=True)
-                                    if channel.guild and channel.guild.icon:
-                                        embed.set_thumbnail(url=channel.guild.icon.url)
+                                # Usa menções diretas (economiza API calls)
+                                team1_text = "\n".join([f"<@{uid}>" for uid in team1_queue]) if team1_queue else "Nenhum jogador"
+                                team2_text = "\n".join([f"<@{uid}>" for uid in team2_queue]) if team2_queue else "Nenhum jogador"
+
+                                embed = discord.Embed(
+                                    title=mode.replace('-', ' ').title(),
+                                    color=EMBED_COLOR
+                                )
+                                
+                                # Formata valor baseado na moeda
+                                if currency_type == "sonhos":
+                                    valor_formatado = format_sonhos(bet_value)
                                 else:
-                                    current_queue = db.get_queue(queue_id)
-                                    log(f"🔍 Atualizando painel {queue_id}: {len(current_queue)} jogadores na fila")
+                                    valor_formatado = f"R$ {bet_value:.2f}"
+                                
+                                embed.add_field(name="Valor", value=valor_formatado, inline=True)
+                                embed.add_field(name="Time 1", value=team1_text, inline=True)
+                                embed.add_field(name="Time 2", value=team2_text, inline=True)
+                                if channel.guild and channel.guild.icon:
+                                    embed.set_thumbnail(url=channel.guild.icon.url)
+                            else:
+                                current_queue = db.get_queue(queue_id)
+                                log(f"🔍 Atualizando painel {queue_id}: {len(current_queue)} jogadores na fila")
 
-                                    # Usa menções diretas (economiza API calls)
-                                    players_text = "\n".join([f"<@{uid}>" for uid in current_queue]) if current_queue else "Vazio"
+                                # Usa menções diretas (economiza API calls)
+                                players_text = "\n".join([f"<@{uid}>" for uid in current_queue]) if current_queue else "Vazio"
 
-                                    embed = discord.Embed(
-                                        title=mode.replace('-', ' ').title(),
-                                        color=EMBED_COLOR
-                                    )
-                                    embed.add_field(name="Valor", value=format_sonhos(bet_value), inline=True)
-                                    embed.add_field(name="Fila", value=players_text, inline=True)
-                                    if channel.guild and channel.guild.icon:
-                                        embed.set_thumbnail(url=channel.guild.icon.url)
+                                embed = discord.Embed(
+                                    title=mode.replace('-', ' ').title(),
+                                    color=EMBED_COLOR
+                                )
+                                
+                                # Formata valor baseado na moeda
+                                if currency_type == "sonhos":
+                                    valor_formatado = format_sonhos(bet_value)
+                                else:
+                                    valor_formatado = f"R$ {bet_value:.2f}"
+                                
+                                embed.add_field(name="Valor", value=valor_formatado, inline=True)
+                                embed.add_field(name="Fila", value=players_text, inline=True)
+                                if channel.guild and channel.guild.icon:
+                                    embed.set_thumbnail(url=channel.guild.icon.url)
 
-                                await message.edit(embed=embed)
-                                log(f"✅ Painel {queue_id} atualizado com sucesso")
-                        except Exception as e:
-                            log(f"Erro ao atualizar mensagem da fila {queue_id}: {e}")
+                            await message.edit(embed=embed)
+                            log(f"✅ Painel {queue_id} atualizado com sucesso")
+                    except Exception as e:
+                        log(f"⚠️ Erro ao atualizar mensagem da fila {queue_id}: {e}")
+                    
+                    # DEPOIS limpa metadados se a fila ficou vazia
+                    if not updated_queue:
+                        db.delete_queue_metadata(message_id)
+                        # Limpa do dicionário em memória (previne memory leak)
+                        if queue_id in queue_messages:
+                            del queue_messages[queue_id]
+                        log(f"🧹 Metadata e memória limpos para fila vazia {queue_id}")
 
             # Aguarda 60 segundos antes de verificar novamente (economiza processamento)
             await asyncio.sleep(60)
