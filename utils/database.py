@@ -66,6 +66,7 @@ class Database:
         import logging
         logger = logging.getLogger('bot')
         
+        temp_file = None
         try:
             # Salva em arquivo temporário primeiro (atomic write)
             temp_file = f"{self.data_file}.tmp"
@@ -78,7 +79,7 @@ class Database:
         except Exception as e:
             logger.error(f"❌ Erro ao salvar dados: {e}")
             # Remove arquivo temporário se existir
-            if os.path.exists(temp_file):
+            if temp_file and os.path.exists(temp_file):
                 os.remove(temp_file)
             raise
 
@@ -147,19 +148,6 @@ class Database:
 
         self._save_data(data)
 
-    def delete_queue_metadata(self, message_id: int):
-        """Remove metadados de uma fila (quando painel é deletado)"""
-        data = self._load_data()
-        
-        if 'queue_metadata' not in data:
-            return
-        
-        message_id_str = str(message_id)
-        if message_id_str in data['queue_metadata']:
-            del data['queue_metadata'][message_id_str]
-            self._save_data(data)
-            logger.info(f"🗑️ DB: Metadados da mensagem {message_id} removidos")
-    
     def get_queue(self, queue_id: str) -> List[int]:
         """Retorna a fila de um painel específico"""
         data = self._load_data()
@@ -373,6 +361,9 @@ class Database:
 
     def delete_queue_metadata(self, message_id: int):
         """Remove metadados de uma fila"""
+        import logging
+        logger = logging.getLogger('bot')
+        
         data = self._load_data()
         if 'queue_metadata' not in data:
             return
@@ -381,6 +372,7 @@ class Database:
         if message_id_str in data['queue_metadata']:
             del data['queue_metadata'][message_id_str]
             self._save_data(data)
+            logger.info(f"🗑️ DB: Metadados da mensagem {message_id} removidos")
 
     def cleanup_orphaned_data(self):
         """Remove dados órfãos (filas vazias, timestamps sem fila, etc.) para economizar espaço"""
