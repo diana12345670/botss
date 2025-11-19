@@ -426,11 +426,16 @@ class QueueButton(discord.ui.View):
             currency_type = metadata.get('currency_type', 'sonhos')
             log(f"✅ Metadados encontrados: queue_id={queue_id}, bet_value={bet_value}, mediator_fee={mediator_fee}, currency={currency_type}")
         else:
-            # CRÍTICO: Se não encontrou metadados, aborta (não usa valores zero!)
+            # Se não encontrou metadados, pode ser problema temporário ou configuração incompleta
             log(f"❌ ERRO: Metadados não encontrados para mensagem {interaction.message.id}")
             log(f"📋 Metadados disponíveis no banco: {list(db.get_all_queue_metadata().keys())}")
             await interaction.followup.send(
-                "Erro: Esta fila não está mais disponível. Por favor, peça ao mediador para criar uma nova fila com /mostrar-fila.",
+                "⚠️ **Erro ao acessar esta fila**\n\n"
+                "Os dados desta fila não foram encontrados. Isso pode acontecer se:\n"
+                "• O painel é muito antigo e foi criado antes da atualização\n"
+                "• Houve uma reinicialização recente do bot\n\n"
+                "**Solução:** Peça ao mediador para criar um novo painel com `/mostrar-fila` ou `/preset-filas`.\n"
+                "Os novos painéis funcionarão indefinidamente sem problemas! ✅",
                 ephemeral=True
             )
             return
@@ -1229,7 +1234,12 @@ async def cleanup_expired_queues():
 
 @bot.event
 async def on_message_delete(message):
-    """Detecta quando uma mensagem de painel é deletada e limpa os dados da fila"""
+    """Detecta quando uma mensagem de painel é deletada
+    
+    IMPORTANTE: NÃO deletamos metadados para permitir que os botões
+    funcionem indefinidamente, mesmo após reinicializações do bot.
+    Os jogadores na fila são limpos, mas os metadados são mantidos.
+    """
     try:
         # Verifica se a mensagem deletada tinha metadados de fila
         metadata = db.get_queue_metadata(message.id)
@@ -1237,24 +1247,26 @@ async def on_message_delete(message):
         if metadata:
             queue_id = metadata['queue_id']
             log(f"🗑️ Mensagem de painel deletada (ID: {message.id})")
-            log(f"🧹 Limpando dados da fila {queue_id}...")
+            log(f"🧹 Limpando apenas jogadores da fila {queue_id} (metadados preservados)...")
 
-            # Remove metadados
-            db.delete_queue_metadata(message.id)
+            # NÃO REMOVE METADADOS - mantém para sempre para que botões funcionem indefinidamente
+            # Comentado: db.delete_queue_metadata(message.id)
 
             # Remove do dicionário em memória
             if queue_id in queue_messages:
                 del queue_messages[queue_id]
 
-            # Limpa a fila (remove todos jogadores)
+            # Limpa apenas a fila de jogadores (remove todos jogadores)
+            # mas mantém os metadados para que possam criar nova fila no mesmo painel
             data = db._load_data()
             if queue_id in data.get('queues', {}):
-                del data['queues'][queue_id]
+                data['queues'][queue_id] = []  # Limpa jogadores ao invés de deletar
+                log(f"✅ Jogadores da fila {queue_id} removidos")
             if queue_id in data.get('queue_timestamps', {}):
-                del data['queue_timestamps'][queue_id]
+                data['queue_timestamps'][queue_id] = {}  # Limpa timestamps ao invés de deletar
             db._save_data(data)
 
-            log(f"✅ Fila {queue_id} completamente removida (economia de espaço)")
+            log(f"✅ Fila {queue_id} limpa (metadados preservados para reuso)")
     except Exception as e:
         log(f"⚠️ Erro ao processar mensagem deletada: {e}")
 
@@ -2221,7 +2233,6 @@ async def desbugar_filas(interaction: discord.Interaction):
 
     deleted_channels = 0
     cancelled_bets = 0
-    deleted_panels = 0
 
     # Cancelar todas as apostas ativas
     for bet_id, bet in list(active_bets.items()):
@@ -2246,46 +2257,41 @@ async def desbugar_filas(interaction: discord.Interaction):
         db.finish_bet(bet)
         cancelled_bets += 1
 
-    # Deletar todos os painéis de fila
-    for message_id_str, metadata in list(all_metadata.items()):
-        try:
-            channel_id = metadata.get('channel_id')
-            message_id = metadata.get('message_id')
-            
-            if channel_id and message_id:
-                channel = interaction.guild.get_channel(channel_id)
-                if channel:
-                    try:
-                        message = await channel.fetch_message(message_id)
-                        await message.delete()
-                        deleted_panels += 1
-                        log(f"🗑️ Painel deletado: mensagem {message_id} no canal {channel_id}")
-                    except discord.NotFound:
-                        log(f"⚠️ Mensagem {message_id} não encontrada (já foi deletada)")
-                    except Exception as e:
-                        log(f"⚠️ Erro ao deletar mensagem {message_id}: {e}")
-        except Exception as e:
-            log(f"⚠️ Erro ao processar metadata {message_id_str}: {e}")
-
-    # Limpar todas as filas e metadados
+    # NÃO deletar painéis de fila - eles podem ser reutilizados indefinidamente!
+    # Apenas limpar os jogadores das filas (preservando metadados)
+    
+    # Limpar apenas as listas de jogadores nas filas (mantém metadados para reuso)
     data = db._load_data()
-    data['queues'] = {}
-    data['queue_timestamps'] = {}
-    data['queue_metadata'] = {}
+    
+    # Limpar jogadores de todas as filas
+    if 'queues' in data:
+        for queue_id in data['queues'].keys():
+            data['queues'][queue_id] = []  # Limpa jogadores mas mantém a estrutura
+    
+    # Limpar timestamps
+    if 'queue_timestamps' in data:
+        for queue_id in data['queue_timestamps'].keys():
+            data['queue_timestamps'][queue_id] = {}  # Limpa timestamps mas mantém a estrutura
+    
+    # CRÍTICO: NÃO DELETAR queue_metadata - painéis devem funcionar para sempre!
+    # Os metadados são preservados para que os painéis continuem funcionando
+    
     db._save_data(data)
+    
+    log(f"✅ Filas limpas (metadados preservados para reuso dos painéis)")
 
     # Limpar dicionário em memória
     queue_messages.clear()
 
     embed = discord.Embed(
         title="Sistema Desbugado",
-        description="Todas as apostas ativas foram canceladas, filas limpas e painéis deletados.",
+        description="Todas as apostas ativas foram canceladas e filas limpas.\n\n✅ **Painéis preservados** - Os painéis de fila continuam funcionando e podem ser reutilizados!",
         color=EMBED_COLOR
     )
     embed.add_field(name="Apostas Canceladas", value=str(cancelled_bets), inline=True)
     embed.add_field(name="Canais Deletados", value=str(deleted_channels), inline=True)
-    embed.add_field(name="Painéis Deletados", value=str(deleted_panels), inline=True)
-    embed.add_field(name="Filas Limpas", value="Todas", inline=True)
+    embed.add_field(name="Filas Limpas", value="Todas (jogadores removidos)", inline=True)
+    embed.add_field(name="Painéis", value="Preservados para reuso ♻️", inline=True)
     if interaction.guild.icon:
         embed.set_thumbnail(url=interaction.guild.icon.url)
     embed.set_footer(text=f"{CREATOR_FOOTER} | Executado por {interaction.user.name}")
@@ -2992,7 +2998,7 @@ async def start_web_server():
     runner = web.AppRunner(app)
     await runner.setup()
 
-    port = int(os.getenv('PORT', 8080))
+    port = int(os.getenv('PORT', 5000))
     site = web.TCPSite(runner, '0.0.0.0', port)
     await site.start()
 
@@ -3050,7 +3056,7 @@ async def run_multiple_bots():
         raise Exception("Configure DISCORD_TOKEN nas variáveis de ambiente.")
 
     log(f"🤖 Iniciando bot...")
-    log(f"📋 Token: {token[:20]}...{token[-10:]}")
+    # SEGURANÇA: Não logar o token do Discord
 
     # Usar o bot principal que já tem todos os comandos registrados
     await bot.start(token, reconnect=True)

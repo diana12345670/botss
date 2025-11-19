@@ -135,9 +135,30 @@ This ensures atomic player reservation and prevents race conditions in high-traf
 - If no valid mediators available: abort creation and re-queue players
 - Never allows a player to be their own mediator, even in small guilds
 
-## Recent Changes (October 23, 2025)
+## Recent Changes
 
-### Complete Bot Implementation
+### November 19, 2025 - Persistent Queue Panels
+**Problem:** Queue panels were becoming invalid after a few hours, requiring mediators to constantly create new panels.
+
+**Solution:** Implemented permanent metadata persistence:
+- Queue metadata is now **never deleted**, even when messages are deleted
+- Panels can be reused indefinitely - same panel works for multiple matches
+- Fixed issue where metadata was being cleared on message deletion
+- Improved error messages to guide users when encountering legacy panels
+- System automatically preserves panel configuration across bot restarts
+
+**Impact:** 
+- ✅ Panels work forever - no more "invalid" messages
+- ✅ Same panel can handle unlimited matches
+- ✅ Works perfectly on Fly.io with automatic persistence
+- ✅ Both `/mostrar-fila` and `/preset-filas` panels remain functional indefinitely
+
+**Technical Details:**
+- Modified `on_message_delete` event to preserve metadata while clearing player lists
+- Queue metadata stays in database permanently
+- Player lists are cleared but panel configuration persists
+
+### October 23, 2025 - Complete Bot Implementation
 - Implemented full betting system with queue management
 - Added private channel creation with access control
 - Payment confirmation system with mediator notifications
