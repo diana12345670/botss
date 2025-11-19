@@ -867,6 +867,21 @@ class PixModal(discord.ui.Modal, title='Inserir Chave PIX'):
         if thread:
             # Adiciona o mediador ao tópico
             await thread.add_user(interaction.user)
+            
+            # Configura permissões para o mediador enviar mensagens e anexar arquivos
+            try:
+                await thread.set_permissions(
+                    interaction.user,
+                    overwrite=discord.PermissionOverwrite(
+                        send_messages=True,
+                        attach_files=True,
+                        embed_links=True,
+                        read_message_history=True
+                    )
+                )
+                log(f"✅ Permissões configuradas para o mediador no tópico")
+            except Exception as e:
+                log(f"⚠️ Erro ao configurar permissões do mediador: {e}")
 
             # Envia uma mensagem no tópico mencionando os jogadores
             await thread.send(f"<@{bet.player1_id}> <@{bet.player2_id}> Um mediador aceitou a aposta! ✅")
@@ -934,6 +949,22 @@ async def accept_bet_with_sonhos(interaction: discord.Interaction, bet_id: str):
 
     if thread:
         await thread.add_user(interaction.user)
+        
+        # Configura permissões para o mediador enviar mensagens e anexar arquivos
+        try:
+            await thread.set_permissions(
+                interaction.user,
+                overwrite=discord.PermissionOverwrite(
+                    send_messages=True,
+                    attach_files=True,
+                    embed_links=True,
+                    read_message_history=True
+                )
+            )
+            log(f"✅ Permissões configuradas para o mediador no tópico")
+        except Exception as e:
+            log(f"⚠️ Erro ao configurar permissões do mediador: {e}")
+        
         await thread.send(
             f"<@{bet.player1_id}> <@{bet.player2_id}> Um mediador aceitou a aposta em Sonhos! ✅\n\n"
             f"**Próximo passo:** Transfiram **{valor_total}** Sonhos para {interaction.user.mention} usando a Loritta."
@@ -1184,13 +1215,9 @@ async def cleanup_expired_queues():
                     except Exception as e:
                         log(f"⚠️ Erro ao atualizar mensagem da fila {queue_id}: {e}")
                     
-                    # DEPOIS limpa metadados se a fila ficou vazia
-                    if not updated_queue:
-                        db.delete_queue_metadata(message_id)
-                        # Limpa do dicionário em memória (previne memory leak)
-                        if queue_id in queue_messages:
-                            del queue_messages[queue_id]
-                        log(f"🧹 Metadata e memória limpos para fila vazia {queue_id}")
+                    # NÃO limpa metadados - fila deve ficar sempre disponível 24/7
+                    # Removido: limpeza de metadados quando fila fica vazia
+                    # A fila permanece disponível para novos jogadores entrarem a qualquer momento
 
             # Aguarda 60 segundos antes de verificar novamente (economiza processamento)
             await asyncio.sleep(60)
@@ -1497,6 +1524,141 @@ async def mostrar_fila(interaction: discord.Interaction, modo: app_commands.Choi
     log(f"Fila criada e pronta para uso: {mode} com moeda {currency_type}")
 
 
+@bot.tree.command(name="preset-filas", description="[MODERADOR] Criar várias filas com valores pré-definidos")
+@app_commands.describe(
+    modo="Escolha o modo de jogo",
+    taxa="Taxa do mediador (exemplo: 5%, 500, 1k)",
+    moeda="Tipo de moeda da aposta (Reais ou Sonhos)"
+)
+@app_commands.choices(modo=[
+    app_commands.Choice(name="1v1 Misto", value="1v1-misto"),
+    app_commands.Choice(name="1v1 Mob", value="1v1-mob"),
+    app_commands.Choice(name="2v2 Misto", value="2v2-misto"),
+    app_commands.Choice(name="2v2 Mob", value="2v2-mob"),
+])
+@app_commands.choices(moeda=[
+    app_commands.Choice(name="Reais", value="reais"),
+    app_commands.Choice(name="Sonhos", value="sonhos"),
+])
+async def preset_filas(interaction: discord.Interaction, modo: app_commands.Choice[str], taxa: str, moeda: app_commands.Choice[str]):
+    # Busca o cargo de mediador configurado
+    mediator_role_id = db.get_mediator_role(interaction.guild.id)
+
+    # Verifica se tem o cargo de mediador configurado
+    has_mediator_role = mediator_role_id and discord.utils.get(interaction.user.roles, id=mediator_role_id) is not None
+
+    if not has_mediator_role:
+        if mediator_role_id:
+            await interaction.response.send_message(
+                f"Você precisa ter o cargo <@&{mediator_role_id}> para usar este comando.",
+                ephemeral=True
+            )
+        else:
+            await interaction.response.send_message(
+                "Este servidor ainda não configurou um cargo de mediador.\n"
+                "Um administrador deve usar /setup @cargo para configurar.",
+                ephemeral=True
+            )
+        return
+
+    mode = modo.value
+    currency_type = moeda.value
+    
+    # Define valores preset baseado na moeda
+    if currency_type == "reais":
+        preset_values = [50, 40, 35, 30, 25, 20, 15, 10, 7, 5, 3, 2, 1]
+    else:  # sonhos
+        preset_values = [2000000, 1000000, 800000, 500000, 300000, 200000, 100000, 50000]
+    
+    # Processa a taxa (pode ser porcentagem ou valor fixo)
+    taxa_str = str(taxa).strip()
+    
+    # Defer a resposta para evitar timeout
+    await interaction.response.defer(ephemeral=True)
+    
+    log(f"🎯 Criando preset de filas: modo={mode}, moeda={currency_type}, taxa={taxa_str}")
+    
+    created_count = 0
+    for valor_numerico in preset_values:
+        try:
+            # Calcula a taxa para cada valor
+            if taxa_str.endswith('%'):
+                # Remove o % e calcula a porcentagem do valor
+                try:
+                    percentual = float(taxa_str[:-1])
+                    taxa_numerica = (percentual / 100) * valor_numerico
+                except ValueError:
+                    await interaction.followup.send(
+                        "Taxa inválida. Use valores como: 5%, 500, 1k",
+                        ephemeral=True
+                    )
+                    return
+            else:
+                # Converte usando parse_value
+                taxa_numerica = parse_value(taxa_str)
+            
+            if taxa_numerica < 0:
+                await interaction.followup.send(
+                    "Taxa inválida. Use valores não-negativos (exemplos: 5%, 500, 1k).",
+                    ephemeral=True
+                )
+                return
+
+            # Formata o valor baseado no tipo de moeda
+            if currency_type == "sonhos":
+                valor_formatado = format_sonhos(valor_numerico)
+            else:
+                valor_formatado = f"R$ {valor_numerico:.2f}"
+
+            embed = discord.Embed(
+                title=modo.name,
+                color=EMBED_COLOR
+            )
+
+            embed.add_field(name="Valor", value=valor_formatado, inline=True)
+            embed.add_field(name="Moeda", value=moeda.name, inline=True)
+            embed.add_field(name="Fila", value="Vazio", inline=False)
+            if interaction.guild.icon:
+                embed.set_thumbnail(url=interaction.guild.icon.url)
+            embed.set_footer(text=CREATOR_FOOTER)
+
+            # Envia a mensagem primeiro
+            message = await interaction.channel.send(embed=embed)
+
+            log(f"📋 Fila preset criada: {valor_formatado} (ID: {message.id})")
+
+            # Cria o view COM o message_id correto
+            view = QueueButton(mode, valor_numerico, taxa_numerica, message.id, currency_type)
+
+            # Salva os metadados da fila no banco de dados ANTES de editar a mensagem
+            queue_id = f"{mode}_{message.id}"
+            db.save_queue_metadata(message.id, mode, valor_numerico, taxa_numerica, interaction.channel.id, currency_type)
+
+            # Salva a informação da fila em memória
+            queue_messages[queue_id] = (interaction.channel.id, message.id, mode, valor_numerico, currency_type)
+
+            # Agora edita a mensagem com os botões
+            await message.edit(embed=embed, view=view)
+            
+            created_count += 1
+            
+            # Pequeno delay para evitar rate limit do Discord
+            await asyncio.sleep(0.5)
+            
+        except Exception as e:
+            log(f"❌ Erro ao criar fila preset para valor {valor_numerico}: {e}")
+            continue
+    
+    # Confirma criação
+    await interaction.followup.send(
+        f"✅ {created_count} filas criadas com sucesso!\n"
+        f"Modo: {modo.name}\n"
+        f"Moeda: {moeda.name}\n"
+        f"Taxa: {taxa_str}",
+        ephemeral=True
+    )
+    
+    log(f"✅ Preset de filas concluído: {created_count} filas criadas")
 
 
 
@@ -1586,6 +1748,30 @@ async def create_bet_channel(guild: discord.Guild, mode: str, player1_id: int, p
             log(f"✅ Jogadores adicionados ao tópico")
         except Exception as e:
             log(f"⚠️ Erro ao adicionar jogadores ao tópico: {e}")
+        
+        # Configura permissões para os jogadores enviarem mensagens e anexarem arquivos
+        try:
+            # Permissões: enviar mensagens, anexar arquivos, enviar embeds, ler histórico
+            overwrites = {
+                player1: discord.PermissionOverwrite(
+                    send_messages=True,
+                    attach_files=True,
+                    embed_links=True,
+                    read_message_history=True
+                ),
+                player2: discord.PermissionOverwrite(
+                    send_messages=True,
+                    attach_files=True,
+                    embed_links=True,
+                    read_message_history=True
+                )
+            }
+            # Aplica permissões ao thread
+            for member, overwrite in overwrites.items():
+                await thread.set_permissions(member, overwrite=overwrite)
+            log(f"✅ Permissões configuradas para os jogadores no tópico")
+        except Exception as e:
+            log(f"⚠️ Erro ao configurar permissões do tópico: {e}")
 
         bet_id = f"{player1_id}_{player2_id}_{int(datetime.now().timestamp())}"
 
@@ -2562,6 +2748,100 @@ async def aviso_do_dev(
     except Exception as e:
         await interaction.response.send_message(f"❌ Erro ao enviar mensagem: {e}", ephemeral=True)
         log(f"❌ Erro ao enviar aviso: {e}")
+
+
+@bot.tree.command(name="aviso-de-atualizacao", description="[CRIADOR] Avisar sobre atualização do bot em todos os servidores")
+async def aviso_de_atualizacao(interaction: discord.Interaction):
+    """Envia aviso de atualização em todos os servidores"""
+    if not is_creator(interaction.user.id):
+        await interaction.response.send_message("❌ Apenas o criador do bot pode usar este comando.", ephemeral=True)
+        return
+    
+    await interaction.response.defer(ephemeral=True)
+    
+    sent_count = 0
+    failed_count = 0
+    
+    for guild in bot.guilds:
+        try:
+            # Tenta encontrar um canal para enviar a mensagem
+            channel = None
+            if guild.system_channel and guild.system_channel.permissions_for(guild.me).send_messages:
+                channel = guild.system_channel
+            else:
+                for ch in guild.text_channels:
+                    if ch.permissions_for(guild.me).send_messages:
+                        channel = ch
+                        break
+            
+            if not channel:
+                log(f"⚠️ Nenhum canal disponível em {guild.name}")
+                failed_count += 1
+                continue
+            
+            # Busca o cargo de mediador configurado
+            mediator_role_id = db.get_mediator_role(guild.id)
+            role_mention = None
+            
+            if mediator_role_id:
+                # Tenta buscar o cargo de mediador configurado
+                mediator_role = guild.get_role(mediator_role_id)
+                if mediator_role:
+                    role_mention = mediator_role.mention
+            
+            # Cria o embed (sem menção dentro)
+            embed = discord.Embed(
+                title="⚠️ Atualização do Bot em 5 Minutos",
+                description=(
+                    "O bot será atualizado em **5 minutos** e precisará reiniciar.\n\n"
+                    "**Durante a atualização:**\n"
+                    "• O bot ficará offline por alguns instantes\n"
+                    "• Todas as filas atuais serão limpas\n"
+                    "• Apostas ativas **NÃO** serão afetadas\n\n"
+                    "**Após a atualização:**\n"
+                    "• Será necessário recriar os painéis de fila\n"
+                    "• Use `/preset-filas` ou `/mostrar-fila`\n\n"
+                    "Pedimos desculpas pelo inconveniente!"
+                ),
+                color=0xFF9900
+            )
+            embed.set_footer(text=CREATOR_FOOTER)
+            
+            if guild.icon:
+                embed.set_thumbnail(url=guild.icon.url)
+            
+            # Envia a mensagem - menciona o cargo FORA do embed se configurado
+            if role_mention:
+                # Marca o cargo ANTES do embed
+                await channel.send(content=role_mention, embed=embed)
+            else:
+                # Sem menção se não houver cargo configurado
+                await channel.send(embed=embed)
+            
+            sent_count += 1
+            log(f"✅ Aviso enviado para {guild.name} (canal: {channel.name})")
+            
+            # Delay para evitar rate limit
+            await asyncio.sleep(1)
+            
+        except Exception as e:
+            log(f"❌ Erro ao enviar aviso para {guild.name}: {e}")
+            failed_count += 1
+            continue
+    
+    # Resposta final
+    result_embed = discord.Embed(
+        title="✅ Avisos Enviados",
+        description=f"Aviso de atualização enviado para os servidores",
+        color=0x00FF00
+    )
+    result_embed.add_field(name="Enviados", value=str(sent_count), inline=True)
+    result_embed.add_field(name="Falharam", value=str(failed_count), inline=True)
+    result_embed.add_field(name="Total", value=str(len(bot.guilds)), inline=True)
+    result_embed.set_footer(text=CREATOR_FOOTER)
+    
+    await interaction.followup.send(embed=result_embed, ephemeral=True)
+    log(f"📢 Avisos de atualização enviados: {sent_count}/{len(bot.guilds)} servidores")
 
 
 # ===== TASK PERIÓDICA PARA VERIFICAR ASSINATURAS =====
