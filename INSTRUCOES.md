@@ -1,4 +1,4 @@
-# 🎮 NZ Apostado - Bot de Apostas Discord
+# 🎮 StormBet Apostas - Bot de Apostas Discord
 
 Sistema completo de apostas para Discord com filas, mediadores e gerenciamento automático de canais.
 

@@ -1,8 +1,8 @@
-# NZ Apostado - Discord Betting Bot
+# StormBet Apostas - Discord Betting Bot
 
 ## Overview
 
-NZ Apostado is a Discord bot that manages a betting system with queue management, automated private channel creation, and bet mediation. The bot allows users to join betting queues for different game modes (1v1 Mixed, 1v1 Mob, 2v2 Mixed), automatically matches players, creates private channels for matched bets, handles payment confirmations, and manages bet finalization through mediators.
+StormBet Apostas is a Discord bot that manages a betting system with queue management, automated private channel creation, and bet mediation. The bot allows users to join betting queues for different game modes (1v1 Mixed, 1v1 Mob, 2v2 Mixed), automatically matches players, creates private channels for matched bets, handles payment confirmations, and manages bet finalization through mediators.
 
 The system is built using Python with the discord.py library and implements a file-based JSON storage solution for managing queues, active bets, and bet history.
 
@@ -39,30 +39,52 @@ Preferred communication style: Simple, everyday language.
 
 ### Data Persistence
 
-**Problem:** Need to persist betting queues, active bets, and historical data across bot restarts.
+**Problem:** Need to persist betting queues, active bets, and historical data across bot restarts, especially on platforms that "sleep" and lose file data.
 
-**Solution:** JSON file-based storage with a database abstraction layer (`Database` class).
+**Solution:** Hybrid database system with PostgreSQL (optional) + JSON (fallback and backup).
+
+**Architecture:**
+- **Primary (with DATABASE_URL):** PostgreSQL with JSONB column
+- **Backup:** Always maintains JSON files as safety layer
+- **Fallback:** If PostgreSQL fails, automatically uses JSON
+- **Triple Backup System:** 3 rotating JSON files (bets.json, bets.backup.json, bets.backup2.json)
 
 **Structure:**
 ```json
 {
-  "queues": {},           // Mode-specific player queues
-  "active_bets": {},      // Currently ongoing bets
-  "bet_history": []       // Completed bet records
+  "queues": {},             // Mode-specific player queues
+  "queue_timestamps": {},   // Queue creation timestamps
+  "queue_metadata": {},     // Panel metadata (permanent)
+  "active_bets": {},        // Currently ongoing bets
+  "bet_history": [],        // Completed bet records
+  "mediator_roles": {},     // Guild mediator configurations
+  "results_channels": {},   // Results announcement channels
+  "subscriptions": {}       // User notification preferences
 }
 ```
 
 **Pros:**
-- Simple setup with no external database dependencies
-- Human-readable format for debugging
-- Easy to version control and backup
+- ✅ PostgreSQL provides persistence on platforms like Render, Railway, Fly.io
+- ✅ JSON backup ensures data never lost even if PostgreSQL fails
+- ✅ Triple backup system protects against file corruption
+- ✅ Automatic fallback - no manual intervention needed
+- ✅ Works with or without PostgreSQL - fully flexible
 
 **Cons:**
-- Not suitable for high-concurrency scenarios
-- Limited query capabilities
-- Potential data loss if file corruption occurs
+- Requires PostgreSQL for production deployments on platforms that clear files
+- Slightly more complex than pure JSON
 
-**Alternatives considered:** SQL databases (SQLite, PostgreSQL) would provide better concurrency and query capabilities but add complexity for this use case.
+**Implementation Details:**
+- Uses `psycopg2.extras.RealDictCursor` for automatic JSONB→dict conversion
+- Uses `psycopg2.extras.Json()` for proper dict→JSONB serialization
+- Connection pooling (1-10 connections) for better performance
+- Automatic schema creation on first run
+- Validates data integrity on every read/write
+
+**Platforms:**
+- **Replit:** Works with built-in PostgreSQL (DATABASE_URL auto-configured)
+- **Render:** Requires PostgreSQL addon ($7/month) for persistence
+- **Railway/Fly.io:** Supports both modes, PostgreSQL recommended
 
 ### Bet Lifecycle Management
 
@@ -136,6 +158,36 @@ This ensures atomic player reservation and prevents race conditions in high-traf
 - Never allows a player to be their own mediator, even in small guilds
 
 ## Recent Changes
+
+### November 20, 2025 - Hybrid Database System
+**Problem:** Data loss on platforms like Render free tier that clear files when service "sleeps".
+
+**Solution:** Implemented hybrid PostgreSQL + JSON system:
+- **PostgreSQL Integration:** Optional PostgreSQL support with automatic JSONB handling
+- **Triple Backup System:** 3 rotating JSON backups for data safety
+- **Automatic Fallback:** Seamlessly switches to JSON if PostgreSQL unavailable
+- **Zero Data Loss:** Multiple layers of redundancy ensure queue data never lost
+- **Platform Flexibility:** Works perfectly on Replit, Render, Railway, Fly.io
+
+**Technical Implementation:**
+- Fixed critical JSONB serialization bug using `RealDictCursor` and `psycopg2.extras.Json`
+- Added data validation on every read/write operation
+- Connection pooling for optimal PostgreSQL performance
+- Automatic schema creation and migration
+- Comprehensive logging for monitoring
+
+**Impact:**
+- ✅ Production-ready on all platforms
+- ✅ Queue data persists through service restarts and sleep cycles
+- ✅ Backward compatible - existing JSON data automatically migrates
+- ✅ No user intervention needed - automatic detection and configuration
+
+**Documentation:** See [SISTEMA_HIBRIDO.md](SISTEMA_HIBRIDO.md) for complete details.
+
+### November 20, 2025 - Branding Update
+- Updated all documentation from "NZ Apostas" to "StormBet Apostas"
+- Updated emails, domains, and app names across 12+ files
+- Maintained all functionality while refreshing brand identity
 
 ### November 19, 2025 - Persistent Queue Panels
 **Problem:** Queue panels were becoming invalid after a few hours, requiring mediators to constantly create new panels.

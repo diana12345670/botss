@@ -1,5 +1,5 @@
 
-# 🎓 Tutorial Completo - NZ Apostas
+# 🎓 Tutorial Completo - StormBet Apostas
 
 Aprenda a usar o bot passo a passo, desde a configuração até a finalização de apostas.
 

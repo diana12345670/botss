@@ -1,15 +1,15 @@
 
-# ⚖️ Termos de Uso - NZ Apostas
+# ⚖️ Termos de Uso - StormBet Apostas
 
 **Última atualização:** 20 de Novembro de 2025
 
 ## 1. Aceitação dos Termos
 
-Ao usar o bot NZ Apostas ("o Bot"), você concorda com estes Termos de Uso. Se não concordar, não use o Bot.
+Ao usar o bot StormBet Apostas ("o Bot"), você concorda com estes Termos de Uso. Se não concordar, não use o Bot.
 
 ## 2. Descrição do Serviço
 
-O NZ Apostas é um bot Discord que facilita a organização e gerenciamento de apostas competitivas entre usuários. O Bot:
+O StormBet Apostas é um bot Discord que facilita a organização e gerenciamento de apostas competitivas entre usuários. O Bot:
 
 - ✅ Gerencia filas de apostas
 - ✅ Cria canais privados automaticamente
@@ -210,7 +210,7 @@ O Bot, seu código, design e marca são propriedade exclusiva dos desenvolvedore
 
 Proibido:
 - Copiar ou clonar o Bot
-- Usar a marca "NZ Apostas" sem autorização
+- Usar a marca "StormBet Apostas" sem autorização
 - Engenharia reversa do código
 
 ## 14. Limitação de Responsabilidade
@@ -253,7 +253,7 @@ Para dúvidas sobre estes termos:
 
 ---
 
-**Ao usar o NZ Apostas, você declara ter lido, compreendido e concordado com estes Termos de Uso.**
+**Ao usar o StormBet Apostas, você declara ter lido, compreendido e concordado com estes Termos de Uso.**
 
 **Data de vigência:** 20 de Novembro de 2025
 

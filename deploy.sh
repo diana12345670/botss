@@ -32,7 +32,7 @@ if [ "$1" = "novo" ]; then
     echo "📝 Criando novo app no Fly.io..."
     echo ""
     
-    fly launch --no-deploy --ha=false --name botss --region gru
+    fly launch --no-deploy --ha=false --name stormbet-bot --region gru
     
     echo ""
     echo "🔑 Configure o token do Discord:"

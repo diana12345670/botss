@@ -1,4 +1,4 @@
-# NZ Apostas - Bot Discord
+# StormBet Apostas - Bot Discord
 
 Bot profissional de apostas para Discord com sistema de filas, mediação e histórico.
 

@@ -1,5 +1,5 @@
 
-# 📖 Comandos do NZ Apostas
+# 📖 Comandos do StormBet Apostas
 
 Guia completo de todos os comandos disponíveis no bot.
 

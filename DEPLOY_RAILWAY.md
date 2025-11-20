@@ -1,5 +1,5 @@
 
-# Deploy do Bot NZ Apostas no Railway
+# Deploy do Bot StormBet Apostas no Railway
 
 Este guia explica como fazer o deploy do bot Discord no Railway.
 

@@ -1,11 +1,11 @@
 
-# 🔒 Política de Privacidade - NZ Apostas
+# 🔒 Política de Privacidade - StormBet Apostas
 
 **Última atualização:** 20 de Novembro de 2025
 
 ## 1. Introdução
 
-Esta Política de Privacidade descreve como o NZ Apostas ("nós", "nosso", "Bot") coleta, usa, armazena e protege suas informações.
+Esta Política de Privacidade descreve como o StormBet Apostas ("nós", "nosso", "Bot") coleta, usa, armazena e protege suas informações.
 
 Ao usar o Bot, você concorda com esta política.
 
@@ -268,7 +268,7 @@ Processamos dados com base em:
 
 ## 15. Conformidade
 
-O NZ Apostas está em conformidade com:
+O StormBet Apostas está em conformidade com:
 
 - ✅ LGPD (Lei Geral de Proteção de Dados - Brasil)
 - ✅ GDPR (General Data Protection Regulation - UE)
@@ -286,7 +286,7 @@ Para questões de privacidade:
 
 ---
 
-**Ao usar o NZ Apostas, você concorda com esta Política de Privacidade.**
+**Ao usar o StormBet Apostas, você concorda com esta Política de Privacidade.**
 
 **Data de vigência:** 20 de Novembro de 2025
 

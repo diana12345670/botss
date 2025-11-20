@@ -1,7 +1,7 @@
 
 # ❓ Perguntas Frequentes (FAQ)
 
-Respostas para as dúvidas mais comuns sobre o NZ Apostas.
+Respostas para as dúvidas mais comuns sobre o StormBet Apostas.
 
 ## 📋 Índice
 
@@ -13,9 +13,9 @@ Respostas para as dúvidas mais comuns sobre o NZ Apostas.
 
 ## 🎮 Geral
 
-### O que é o NZ Apostas?
+### O que é o StormBet Apostas?
 
-O NZ Apostas é um bot Discord que automatiza todo o processo de apostas competitivas, desde a criação de filas até a finalização com declaração de vencedor.
+O StormBet Apostas é um bot Discord que automatiza todo o processo de apostas competitivas, desde a criação de filas até a finalização com declaração de vencedor.
 
 ### O bot é grátis?
 

@@ -1,4 +1,4 @@
-# Deploy no Fly.io - Bot Discord NZ Apostas
+# Deploy no Fly.io - Bot Discord StormBet Apostas
 
 ## Pré-requisitos
 1. Conta no Fly.io (https://fly.io)

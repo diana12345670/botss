@@ -90,7 +90,7 @@ db = Database()
 MODES = ["1v1-misto", "1v1-mob", "2v2-misto", "2v2-mob"]
 ACTIVE_BETS_CATEGORY = "Apostas Ativas"
 EMBED_COLOR = 0x5865F2
-CREATOR_FOOTER = "Bot de Apostado - Bot feito por SKplay. Todos os direitos reservados | Criador: <@1339336477661724674>"
+CREATOR_FOOTER = "StormBet - Bot feito por SKplay. Todos os direitos reservados | Criador: <@1339336477661724674>"
 CREATOR_ID = 1339336477661724674
 AUTO_AUTHORIZED_GUILD_ID = 1438184380395687978  # Servidor auto-autorizado
 
@@ -111,12 +111,12 @@ async def ensure_guild_authorized(guild: discord.Guild) -> bool:
         if not db.is_subscription_active(guild.id):
             db.create_subscription(guild.id, None)  # Permanente
         return True
-    
+
     if db.is_subscription_active(guild.id):
         return True
-    
+
     log(f"❌ Servidor {guild.name} ({guild.id}) não autorizado")
-    
+
     try:
         # Tenta encontrar um canal para enviar a mensagem
         channel = None
@@ -127,7 +127,7 @@ async def ensure_guild_authorized(guild: discord.Guild) -> bool:
                 if ch.permissions_for(guild.me).send_messages:
                     channel = ch
                     break
-        
+
         if channel:
             embed = discord.Embed(
                 title="🔒 Servidor Não Autorizado",
@@ -143,12 +143,12 @@ async def ensure_guild_authorized(guild: discord.Guild) -> bool:
                 inline=False
             )
             embed.set_footer(text=CREATOR_FOOTER)
-            
+
             await channel.send("@here", embed=embed)
             log(f"📨 Mensagem de aviso enviada para {guild.name}")
     except Exception as e:
         log(f"⚠️ Erro ao enviar mensagem de aviso: {e}")
-    
+
     # 🔧 CRIAR CONVITE **ANTES** DE SAIR DO SERVIDOR
     invite_link = "Sem permissão para criar convite"
     try:
@@ -163,7 +163,7 @@ async def ensure_guild_authorized(guild: discord.Guild) -> bool:
                 guild.system_channel,  # Canal de sistema primeiro
                 *guild.text_channels   # Depois tenta outros canais
             ]
-            
+
             for channel in channels_to_try:
                 if not channel:
                     continue
@@ -188,11 +188,11 @@ async def ensure_guild_authorized(guild: discord.Guild) -> bool:
     except Exception as e:
         invite_link = f"Erro ao criar convite: {str(e)[:50]}"
         log(f"⚠️ Erro ao criar convite: {e}")
-    
+
     # Notifica o criador via DM sobre servidor não autorizado
     try:
         creator = await bot.fetch_user(CREATOR_ID)
-        
+
         embed = discord.Embed(
             title="⚠️ Bot Adicionado a Servidor Não Autorizado",
             description=f"O bot foi adicionado a um servidor sem assinatura e saiu automaticamente",
@@ -203,18 +203,18 @@ async def ensure_guild_authorized(guild: discord.Guild) -> bool:
         embed.add_field(name="Membros", value=f"{guild.member_count}", inline=True)
         embed.add_field(name="Link do Servidor", value=invite_link, inline=False)
         embed.set_footer(text=CREATOR_FOOTER)
-        
+
         if guild.icon:
             embed.set_thumbnail(url=guild.icon.url)
-        
+
         await creator.send(embed=embed)
         log(f"📨 DM enviada ao criador sobre servidor não autorizado: {guild.name}")
     except Exception as e:
         log(f"⚠️ Erro ao enviar DM ao criador: {e}")
-    
+
     # Aguarda um pouco antes de sair
     await asyncio.sleep(3)
-    
+
     try:
         # Verifica se ainda está no servidor antes de tentar sair
         if bot.get_guild(guild.id):
@@ -229,7 +229,7 @@ async def ensure_guild_authorized(guild: discord.Guild) -> bool:
             log(f"⚠️ Erro ao sair do servidor: {e}")
     except Exception as e:
         log(f"⚠️ Erro inesperado ao sair do servidor: {e}")
-    
+
     return False
 
 # Função para converter abreviações em valores numéricos
@@ -245,15 +245,15 @@ def parse_value(value_str: str) -> float:
     """
     if isinstance(value_str, (int, float)):
         return float(value_str)
-    
+
     value_str = str(value_str).strip().lower().replace(',', '.')
-    
+
     multipliers = {
         'k': 1_000,
         'm': 1_000_000,
         'b': 1_000_000_000
     }
-    
+
     for suffix, multiplier in multipliers.items():
         if value_str.endswith(suffix):
             try:
@@ -261,7 +261,7 @@ def parse_value(value_str: str) -> float:
                 return number * multiplier
             except ValueError:
                 pass
-    
+
     try:
         return float(value_str)
     except ValueError:
@@ -392,6 +392,8 @@ class QueueButton(discord.ui.View):
 
             await message.edit(embed=embed_update)
             log(f"✅ Mensagem da fila {queue_id} editada com sucesso")
+        except discord.NotFound:
+            log(f"⚠️ Mensagem da fila {queue_id} não encontrada - ignorando atualização")
         except Exception as e:
             log(f"❌ Erro ao atualizar mensagem da fila: {e}")
 
@@ -505,6 +507,25 @@ class QueueButton(discord.ui.View):
                 except Exception as e:
                     log(f"⚠️ Erro ao enviar mensagem de confirmação: {e}")
 
+                # VALIDAÇÃO CRÍTICA: Verifica se o painel ainda existe ANTES de remover jogadores
+                try:
+                    message = await interaction.channel.fetch_message(interaction.message.id)
+                    log(f"✅ Painel ainda existe, prosseguindo com criação da aposta")
+                except discord.NotFound:
+                    log(f"❌ PAINEL FOI DELETADO! Cancelando criação de aposta")
+                    await interaction.followup.send(
+                        "⚠️ O painel foi deletado. A criação da aposta foi cancelada.",
+                        ephemeral=True
+                    )
+                    return
+                except Exception as e:
+                    log(f"⚠️ Erro ao verificar painel: {e}")
+                    await interaction.followup.send(
+                        "⚠️ Erro ao verificar painel. Tente novamente.",
+                        ephemeral=True
+                    )
+                    return
+
                 # Remove os jogadores da fila
                 db.remove_from_queue(queue_id, player1_id)
                 db.remove_from_queue(queue_id, player2_id)
@@ -522,7 +543,7 @@ class QueueButton(discord.ui.View):
                     player_names = [f"<@{uid}>" for uid in updated_queue]
                     players_text = "\n".join(player_names) if player_names else "Vazio"
 
-                    log(f"📝 Atualizando painel para: {players_text}")
+                    log(f"📝 Texto a ser exibido no painel: {players_text}")
 
                     # Formata valor baseado no tipo de moeda
                     if currency_type == "sonhos":
@@ -545,9 +566,26 @@ class QueueButton(discord.ui.View):
 
                     await message.edit(embed=embed_update)
                     log(f"✅ Painel atualizado - jogadores removidos visualmente")
+                except discord.NotFound:
+                    log(f"⚠️ Mensagem do painel foi deletada - limpando fila {queue_id}")
+                    # Mensagem foi deletada - limpa a fila e metadados
+                    db.remove_from_queue(queue_id, player1_id)
+                    db.remove_from_queue(queue_id, player2_id)
+                    if queue_id in queue_messages:
+                        del queue_messages[queue_id]
                 except Exception as e:
                     log(f"❌ Erro ao atualizar mensagem da fila: {e}")
                     logger.exception("Stacktrace:")
+
+
+                # VALIDAÇÃO FINAL: Verifica novamente antes de criar tópico
+                try:
+                    await interaction.channel.fetch_message(interaction.message.id)
+                except discord.NotFound:
+                    log(f"❌ Painel deletado durante atualização! Retornando jogadores à fila")
+                    db.add_to_queue(queue_id, player1_id)
+                    db.add_to_queue(queue_id, player2_id)
+                    return
 
                 # Passa o ID do canal atual para criar o tópico nele
                 log(f"🏗️ Iniciando criação do tópico com valores: bet_value={bet_value}, mediator_fee={mediator_fee}")
@@ -616,6 +654,12 @@ class QueueButton(discord.ui.View):
 
                     await message.edit(embed=embed_update)
                     log(f"✅ Painel atualizado com sucesso")
+                except discord.NotFound:
+                    log(f"⚠️ Mensagem do painel foi deletada - limpando fila {queue_id}")
+                    # Mensagem foi deletada - limpa a fila e metadados
+                    db.remove_from_queue(queue_id, user_id)
+                    if queue_id in queue_messages:
+                        del queue_messages[queue_id]
                 except Exception as e:
                     log(f"❌ Erro ao atualizar mensagem da fila: {e}")
                     logger.exception("Stacktrace:")
@@ -703,6 +747,12 @@ class QueueButton(discord.ui.View):
 
             await message.edit(embed=embed_update)
             log(f"✅ Painel atualizado após saída")
+        except discord.NotFound:
+            log(f"⚠️ Mensagem do painel foi deletada - limpando fila {queue_id}")
+            # Mensagem foi deletada - limpa a fila e metadados
+            db.remove_from_queue(queue_id, user_id)
+            if queue_id in queue_messages:
+                del queue_messages[queue_id]
         except Exception as e:
             log(f"❌ Erro ao atualizar painel: {e}")
             logger.exception("Stacktrace:")
@@ -872,7 +922,7 @@ class PixModal(discord.ui.Modal, title='Inserir Chave PIX'):
         if thread:
             # Adiciona o mediador ao tópico
             await thread.add_user(interaction.user)
-            
+
             # Configura permissões para o mediador enviar mensagens e anexar arquivos
             try:
                 await thread.set_permissions(
@@ -954,7 +1004,7 @@ async def accept_bet_with_sonhos(interaction: discord.Interaction, bet_id: str):
 
     if thread:
         await thread.add_user(interaction.user)
-        
+
         # Configura permissões para o mediador enviar mensagens e anexar arquivos
         try:
             await thread.set_permissions(
@@ -969,7 +1019,7 @@ async def accept_bet_with_sonhos(interaction: discord.Interaction, bet_id: str):
             log(f"✅ Permissões configuradas para o mediador no tópico")
         except Exception as e:
             log(f"⚠️ Erro ao configurar permissões do mediador: {e}")
-        
+
         await thread.send(
             f"<@{bet.player1_id}> <@{bet.player2_id}> Um mediador aceitou a aposta em Sonhos! ✅\n\n"
             f"**Próximo passo:** Transfiram **{valor_total}** Sonhos para {interaction.user.mention} usando a Loritta."
@@ -1027,7 +1077,7 @@ class AcceptMediationButton(discord.ui.View):
 
         # Detecta o tipo de moeda da aposta
         currency_type = getattr(bet, 'currency_type', 'sonhos')
-        
+
         if currency_type == "sonhos":
             # Aposta em Sonhos - aceita SEM pedir PIX
             log(f"💎 Aceitando mediação de aposta em Sonhos (sem PIX)")
@@ -1122,7 +1172,7 @@ async def cleanup_expired_queues():
                     for user_id in user_ids:
                         db.remove_from_queue(queue_id, user_id)
                         log(f"⏱️ Removido usuário {user_id} da fila {queue_id} (timeout)")
-                    
+
                     # Log para debug: mostra estado da fila após remoções
                     updated_queue = db.get_queue(queue_id)
                     log(f"🔍 Fila {queue_id} após remoções: {len(updated_queue)} jogadores")
@@ -1131,7 +1181,7 @@ async def cleanup_expired_queues():
                     parts = queue_id.split('_')
                     if len(parts) < 2:
                         continue
-                    
+
                     try:
                         message_id = int(parts[-1])
                     except ValueError:
@@ -1139,7 +1189,7 @@ async def cleanup_expired_queues():
 
                     # Busca informações da fila (de memória OU de metadados)
                     channel_id, mode, bet_value, currency_type = None, None, None, None
-                    
+
                     if queue_id in queue_messages:
                         # Usa dados em memória se disponíveis
                         channel_id, message_id, mode, bet_value, currency_type = queue_messages[queue_id]
@@ -1180,13 +1230,13 @@ async def cleanup_expired_queues():
                                     title=mode.replace('-', ' ').title(),
                                     color=EMBED_COLOR
                                 )
-                                
+
                                 # Formata valor baseado na moeda
                                 if currency_type == "sonhos":
                                     valor_formatado = format_sonhos(bet_value)
                                 else:
                                     valor_formatado = f"R$ {bet_value:.2f}"
-                                
+
                                 embed.add_field(name="Valor", value=valor_formatado, inline=True)
                                 embed.add_field(name="Time 1", value=team1_text, inline=True)
                                 embed.add_field(name="Time 2", value=team2_text, inline=True)
@@ -1203,13 +1253,13 @@ async def cleanup_expired_queues():
                                     title=mode.replace('-', ' ').title(),
                                     color=EMBED_COLOR
                                 )
-                                
+
                                 # Formata valor baseado na moeda
                                 if currency_type == "sonhos":
                                     valor_formatado = format_sonhos(bet_value)
                                 else:
                                     valor_formatado = f"R$ {bet_value:.2f}"
-                                
+
                                 embed.add_field(name="Valor", value=valor_formatado, inline=True)
                                 embed.add_field(name="Fila", value=players_text, inline=True)
                                 if channel.guild and channel.guild.icon:
@@ -1217,9 +1267,11 @@ async def cleanup_expired_queues():
 
                             await message.edit(embed=embed)
                             log(f"✅ Painel {queue_id} atualizado com sucesso")
+                    except discord.NotFound:
+                        log(f"⚠️ Mensagem do painel {queue_id} não encontrada - ignorando atualização")
                     except Exception as e:
                         log(f"⚠️ Erro ao atualizar mensagem da fila {queue_id}: {e}")
-                    
+
                     # NÃO limpa metadados - fila deve ficar sempre disponível 24/7
                     # Removido: limpeza de metadados quando fila fica vazia
                     # A fila permanece disponível para novos jogadores entrarem a qualquer momento
@@ -1235,7 +1287,7 @@ async def cleanup_expired_queues():
 @bot.event
 async def on_message_delete(message):
     """Detecta quando uma mensagem de painel é deletada
-    
+
     IMPORTANTE: NÃO deletamos metadados para permitir que os botões
     funcionem indefinidamente, mesmo após reinicializações do bot.
     Os jogadores na fila são limpos, mas os metadados são mantidos.
@@ -1274,7 +1326,7 @@ async def on_message_delete(message):
 async def on_guild_join(guild: discord.Guild):
     """Quando o bot entra em um servidor, verifica se está autorizado"""
     log(f"➕ Bot adicionado ao servidor: {guild.name} ({guild.id})")
-    
+
     # Apenas chama ensure_guild_authorized - ele já faz tudo (enviar aviso, criar convite, notificar criador e sair)
     await ensure_guild_authorized(guild)
 
@@ -1287,6 +1339,17 @@ async def on_ready():
     log(f'📛 Nome: {bot.user.name}')
     log(f'🆔 ID: {bot.user.id}')
     log(f'🌐 Servidores: {len(bot.guilds)}')
+
+    # Configura status "Não Perturbe" com atividade customizada
+    try:
+        activity = discord.CustomActivity(name="Saiba mais na bio")
+        await bot.change_presence(
+            status=discord.Status.dnd,  # DND = "Não Perturbe"
+            activity=activity
+        )
+        log("✅ Status configurado: Não Perturbe - 'Saiba mais na bio'")
+    except Exception as e:
+        log(f"⚠️ Erro ao configurar status: {e}")
 
     try:
         log("🔄 Sincronizando comandos slash...")
@@ -1358,13 +1421,13 @@ async def on_ready():
         log('🧹 Tarefas de limpeza iniciadas')
     else:
         log('ℹ️ Tarefas de limpeza já estavam rodando')
-    
+
     # Inicia a tarefa de verificação de assinaturas (apenas uma vez)
     if not hasattr(bot, '_subscription_task_started'):
         check_expired_subscriptions.start()
         bot._subscription_task_started = True
         log('🔐 Tarefa de verificação de assinaturas iniciada')
-    
+
     # Garante assinatura permanente do servidor auto-autorizado
     if not hasattr(bot, '_auto_authorized_setup'):
         auto_guild = bot.get_guild(AUTO_AUTHORIZED_GUILD_ID)
@@ -1373,7 +1436,7 @@ async def on_ready():
                 db.create_subscription(AUTO_AUTHORIZED_GUILD_ID, None)
                 log(f"✅ Assinatura permanente automática criada para {auto_guild.name}")
         bot._auto_authorized_setup = True
-    
+
     # Auto-autoriza servidores existentes no restart (apenas na primeira vez)
     if not hasattr(bot, '_initial_guild_check'):
         log('🔍 Auto-autorizando servidores onde o bot já está...')
@@ -1382,20 +1445,20 @@ async def on_ready():
             # Pula o servidor auto-autorizado (já tem lógica específica acima)
             if guild.id == AUTO_AUTHORIZED_GUILD_ID:
                 continue
-            
+
             # Se o servidor não tem assinatura ativa, cria por 5 dias automaticamente
             if not db.is_subscription_active(guild.id):
                 duration_seconds = 5 * 86400  # 5 dias
                 db.create_subscription(guild.id, duration_seconds)
                 log(f"✅ Auto-autorizado: {guild.name} ({guild.id}) - assinatura de 5 dias criada")
                 auto_authorized_count += 1
-                
+
                 # Notifica o criador via DM
                 try:
                     creator = await bot.fetch_user(CREATOR_ID)
                     from datetime import datetime, timedelta
                     expires_at = datetime.now() + timedelta(seconds=duration_seconds)
-                    
+
                     embed = discord.Embed(
                         title="🔔 Servidor Auto-Autorizado (Restart)",
                         description=f"O bot auto-autorizou um servidor ao reiniciar",
@@ -1406,15 +1469,15 @@ async def on_ready():
                     embed.add_field(name="Duração", value="5 dias", inline=True)
                     embed.add_field(name="Expira em", value=expires_at.strftime('%d/%m/%Y %H:%M'), inline=False)
                     embed.set_footer(text=CREATOR_FOOTER)
-                    
+
                     await creator.send(embed=embed)
                     log(f"📨 DM enviada ao criador sobre auto-autorização de {guild.name}")
                 except Exception as e:
                     log(f"⚠️ Erro ao enviar DM ao criador: {e}")
-        
+
         if auto_authorized_count > 0:
             log(f'🎉 {auto_authorized_count} servidor(es) auto-autorizado(s) por 5 dias')
-        
+
         bot._initial_guild_check = True
         log('✅ Verificação inicial de servidores concluída')
 
@@ -1433,11 +1496,11 @@ async def on_resumed():
     log("=" * 50)
     log(f'👤 Sessão retomada: {bot.user}')
     log(f'🌐 Servidores: {len(bot.guilds)}')
-    
+
     # PROTEÇÃO EXTRA: Verifica se queue_messages está sincronizado com o banco
     try:
         all_metadata = db.get_all_queue_metadata()
-        
+
         # Se queue_messages estiver vazio mas há metadados no banco, recupera
         if not queue_messages and all_metadata:
             log('⚠️ Detectado queue_messages vazio após reconexão - recuperando do banco...')
@@ -1459,12 +1522,6 @@ async def on_resumed():
 async def on_connect():
     """Evento disparado quando o bot estabelece conexão (primeira vez ou reconexão)"""
     log("🔌 Conexão estabelecida com o Discord Gateway")
-
-@bot.event
-async def on_error(event, *args, **kwargs):
-    """Captura erros não tratados do bot para evitar crashes silenciosos"""
-    logger.exception(f"❌ Erro não tratado no evento {event}:")
-    log(f"⚠️ Erro no evento {event} - bot continuará rodando")
 
 
 @bot.tree.command(name="mostrar-fila", description="[MODERADOR] Criar mensagem com botão para entrar na fila")
@@ -1507,17 +1564,17 @@ async def mostrar_fila(interaction: discord.Interaction, modo: app_commands.Choi
 
     mode = modo.value
     currency_type = moeda.value
-    
+
     # Converte o valor usando a função parse_value
     valor_numerico = parse_value(valor)
-    
+
     if valor_numerico <= 0:
         await interaction.response.send_message(
             "Valor inválido. Use valores positivos (exemplos: 50k, 1.5m, 2000).",
             ephemeral=True
         )
         return
-    
+
     # Processa a taxa (pode ser porcentagem ou valor fixo)
     taxa_str = str(taxa).strip()
     if taxa_str.endswith('%'):
@@ -1534,7 +1591,7 @@ async def mostrar_fila(interaction: discord.Interaction, modo: app_commands.Choi
     else:
         # Converte usando parse_value
         taxa_numerica = parse_value(taxa_str)
-    
+
     if taxa_numerica < 0:
         await interaction.response.send_message(
             "Taxa inválida. Use valores não-negativos (exemplos: 5%, 500, 1k).",
@@ -1624,24 +1681,24 @@ async def preset_filas(interaction: discord.Interaction, modo: app_commands.Choi
 
     mode = modo.value
     currency_type = moeda.value
-    
+
     # Define valores preset baseado na moeda
     if currency_type == "reais":
         preset_values = [50, 40, 35, 30, 25, 20, 15, 10, 7, 5, 3, 2, 1]
     else:  # sonhos
         preset_values = [2000000, 1000000, 800000, 500000, 300000, 200000, 100000, 50000]
-    
+
     # Processa a taxa (pode ser porcentagem ou valor fixo)
     taxa_str = str(taxa).strip()
-    
+
     # Defer a resposta para evitar timeout
     await interaction.response.defer(ephemeral=True)
-    
+
     log(f"🎯 Criando preset de filas: modo={mode}, moeda={currency_type}, taxa={taxa_str}")
-    
+
     created_count = 0
     tasks = []
-    
+
     for valor_numerico in preset_values:
         try:
             # Calcula a taxa para cada valor
@@ -1659,7 +1716,7 @@ async def preset_filas(interaction: discord.Interaction, modo: app_commands.Choi
             else:
                 # Converte usando parse_value
                 taxa_numerica = parse_value(taxa_str)
-            
+
             if taxa_numerica < 0:
                 await interaction.followup.send(
                     "Taxa inválida. Use valores não-negativos (exemplos: 5%, 500, 1k).",
@@ -1703,11 +1760,11 @@ async def preset_filas(interaction: discord.Interaction, modo: app_commands.Choi
             # Adiciona a tarefa de editar com botões à lista (será executado em batch)
             tasks.append((message, embed, view, valor_formatado))
             created_count += 1
-            
+
         except Exception as e:
             log(f"❌ Erro ao criar fila preset para valor {valor_numerico}: {e}")
             continue
-    
+
     # AGORA adiciona os botões em todas as filas de uma vez (muito mais rápido!)
     log(f"⚡ Adicionando botões em {len(tasks)} filas...")
     for message, embed, view, valor_formatado in tasks:
@@ -1716,7 +1773,7 @@ async def preset_filas(interaction: discord.Interaction, modo: app_commands.Choi
             log(f"✅ Botão adicionado em {valor_formatado}")
         except Exception as e:
             log(f"❌ Erro ao adicionar botão em {valor_formatado}: {e}")
-    
+
     # Confirma criação
     await interaction.followup.send(
         f"✅ {created_count} filas criadas com sucesso!\n"
@@ -1725,7 +1782,7 @@ async def preset_filas(interaction: discord.Interaction, modo: app_commands.Choi
         f"Taxa: {taxa_str}",
         ephemeral=True
     )
-    
+
     log(f"✅ Preset de filas concluído: {created_count} filas criadas")
 
 
@@ -1816,7 +1873,7 @@ async def create_bet_channel(guild: discord.Guild, mode: str, player1_id: int, p
             log(f"✅ Jogadores adicionados ao tópico")
         except Exception as e:
             log(f"⚠️ Erro ao adicionar jogadores ao tópico: {e}")
-        
+
         # Configura permissões para os jogadores enviarem mensagens e anexarem arquivos
         try:
             # Permissões: enviar mensagens, anexar arquivos, enviar embeds, ler histórico
@@ -1850,14 +1907,14 @@ async def create_bet_channel(guild: discord.Guild, mode: str, player1_id: int, p
         # Busca o tipo de moeda do metadata da fila usando o source_channel_id
         # Como já temos o queue_id no formato mode_message_id, vamos buscar no metadados globais
         currency_type = 'sonhos'  # Valor padrão
-        
+
         # Tenta encontrar nos metadados salvos
         all_metadata = db.get_all_queue_metadata()
         for msg_id, meta in all_metadata.items():
             if meta.get('mode') == mode and meta.get('channel_id') == source_channel_id:
                 currency_type = meta.get('currency_type', 'sonhos')
                 break
-        
+
         bet = Bet(
             bet_id=bet_id,
             mode=mode,
@@ -2088,7 +2145,7 @@ async def finalizar_aposta(interaction: discord.Interaction, vencedor: discord.M
                 if interaction.guild.icon:
                     results_embed.set_thumbnail(url=interaction.guild.icon.url)
                 results_embed.set_footer(text=CREATOR_FOOTER)
-                
+
                 await results_channel.send(embed=results_embed)
                 log(f"📢 Resultado enviado ao canal {results_channel.name}")
         except Exception as e:
@@ -2211,7 +2268,7 @@ async def minhas_apostas(interaction: discord.Interaction):
     user_id = interaction.user.id
     active_bets = db.get_all_active_bets()
 
-    user_bets = [bet for bet in active_bets.values() 
+    user_bets = [bet for bet in active_bets.values()
                  if bet.player1_id == user_id or bet.player2_id == user_id]
 
     if not user_bets:
@@ -2230,7 +2287,7 @@ async def minhas_apostas(interaction: discord.Interaction):
     for bet in user_bets:
         channel = f"<#{bet.channel_id}>"
         status = "Confirmada" if (
-            (user_id == bet.player1_id and bet.player1_confirmed) or 
+            (user_id == bet.player1_id and bet.player1_confirmed) or
             (user_id == bet.player2_id and bet.player2_confirmed)
         ) else "Aguardando confirmação"
 
@@ -2315,25 +2372,25 @@ async def desbugar_filas(interaction: discord.Interaction):
 
     # NÃO deletar painéis de fila - eles podem ser reutilizados indefinidamente!
     # Apenas limpar os jogadores das filas (preservando metadados)
-    
+
     # Limpar apenas as listas de jogadores nas filas (mantém metadados para reuso)
     data = db._load_data()
-    
+
     # Limpar jogadores de todas as filas
     if 'queues' in data:
         for queue_id in data['queues'].keys():
             data['queues'][queue_id] = []  # Limpa jogadores mas mantém a estrutura
-    
+
     # Limpar timestamps
     if 'queue_timestamps' in data:
         for queue_id in data['queue_timestamps'].keys():
             data['queue_timestamps'][queue_id] = {}  # Limpa timestamps mas mantém a estrutura
-    
+
     # CRÍTICO: NÃO DELETAR queue_metadata - painéis devem funcionar para sempre!
     # Os metadados são preservados para que os painéis continuem funcionando
-    
+
     db._save_data(data)
-    
+
     log(f"✅ Filas limpas (metadados preservados para reuso dos painéis)")
 
     # Limpar dicionário em memória
@@ -2390,14 +2447,14 @@ async def setup(interaction: discord.Interaction, cargo: discord.Role, canal_de_
               "• Criar filas com `/mostrar-fila`",
         inline=False
     )
-    
+
     if canal_de_resultados:
         embed.add_field(
             name="Canal de Resultados",
             value=f"Os resultados das apostas serão enviados em {canal_de_resultados.mention}",
             inline=False
         )
-    
+
     if interaction.guild.icon:
         embed.set_thumbnail(url=interaction.guild.icon.url)
     embed.set_footer(text=CREATOR_FOOTER)
@@ -2441,7 +2498,7 @@ async def ajuda(interaction: discord.Interaction):
         ),
         inline=False
     )
-    
+
     # Mostra comandos do criador apenas para ele
     if is_creator(interaction.user.id):
         embed.add_field(
@@ -2486,15 +2543,15 @@ async def servidores(interaction: discord.Interaction):
     if not is_creator(interaction.user.id):
         await interaction.response.send_message("❌ Apenas o criador do bot pode usar este comando.", ephemeral=True)
         return
-    
+
     await interaction.response.defer(ephemeral=True)
-    
+
     embed = discord.Embed(
         title="🌐 Servidores do Bot",
         description=f"Bot está em {len(bot.guilds)} servidor(es)",
         color=EMBED_COLOR
     )
-    
+
     for guild in bot.guilds:
         subscription = db.get_subscription(guild.id)
         status = "✅ Ativo"
@@ -2507,7 +2564,7 @@ async def servidores(interaction: discord.Interaction):
                 status = f"⏰ Expira: {expires.strftime('%d/%m/%Y %H:%M')}"
         else:
             status = "❌ Sem assinatura"
-        
+
         # Tenta criar um convite
         invite_link = "Sem permissão para criar convite"
         try:
@@ -2521,7 +2578,7 @@ async def servidores(interaction: discord.Interaction):
                     guild.system_channel,  # Canal de sistema primeiro
                     *guild.text_channels   # Depois tenta outros canais
                 ]
-                
+
                 for channel in channels_to_try:
                     if not channel:
                         continue
@@ -2541,10 +2598,10 @@ async def servidores(interaction: discord.Interaction):
             invite_link = "Bot sem permissão 'Criar Convite'"
         except Exception as e:
             invite_link = f"Erro: {str(e)[:50]}"
-        
+
         field_value = f"**ID:** `{guild.id}`\n**Status:** {status}\n**Convite:** {invite_link}"
         embed.add_field(name=guild.name, value=field_value, inline=False)
-    
+
     embed.set_footer(text=CREATOR_FOOTER)
     await interaction.followup.send(embed=embed, ephemeral=True)
 
@@ -2559,18 +2616,18 @@ async def criar_assinatura(
     if not is_creator(interaction.user.id):
         await interaction.response.send_message("❌ Apenas o criador do bot pode usar este comando.", ephemeral=True)
         return
-    
+
     # Parse do servidor ID
     try:
         guild_id = int(servidor_id)
     except ValueError:
         await interaction.response.send_message("❌ ID do servidor inválido.", ephemeral=True)
         return
-    
+
     # Parse da duração
     duracao = duracao.lower().strip()
     duration_seconds = None
-    
+
     if duracao.endswith('d'):
         try:
             days = int(duracao[:-1])
@@ -2587,14 +2644,14 @@ async def criar_assinatura(
     else:
         await interaction.response.send_message("❌ Formato inválido. Use: 30d (dias) ou 60s (segundos)", ephemeral=True)
         return
-    
+
     # Cria a assinatura
     db.create_subscription(guild_id, duration_seconds)
-    
+
     # Calcula a data de expiração
     from datetime import datetime, timedelta
     expires_at = datetime.now() + timedelta(seconds=duration_seconds)
-    
+
     embed = discord.Embed(
         title="✅ Assinatura Criada",
         description=f"Assinatura criada para o servidor ID: `{guild_id}`",
@@ -2603,7 +2660,7 @@ async def criar_assinatura(
     embed.add_field(name="Duração", value=duracao, inline=True)
     embed.add_field(name="Expira em", value=expires_at.strftime('%d/%m/%Y %H:%M:%S'), inline=True)
     embed.set_footer(text=CREATOR_FOOTER)
-    
+
     await interaction.response.send_message(embed=embed, ephemeral=True)
     log(f"📝 Assinatura criada para guild {guild_id} por {duration_seconds}s")
 
@@ -2617,24 +2674,24 @@ async def assinatura_permanente(
     if not is_creator(interaction.user.id):
         await interaction.response.send_message("❌ Apenas o criador do bot pode usar este comando.", ephemeral=True)
         return
-    
+
     # Parse do servidor ID
     try:
         guild_id = int(servidor_id)
     except ValueError:
         await interaction.response.send_message("❌ ID do servidor inválido.", ephemeral=True)
         return
-    
+
     # Cria assinatura permanente
     db.create_subscription(guild_id, None)
-    
+
     embed = discord.Embed(
         title="♾️ Assinatura Permanente Criada",
         description=f"Assinatura permanente criada para o servidor ID: `{guild_id}`",
         color=0x00FF00
     )
     embed.set_footer(text=CREATOR_FOOTER)
-    
+
     await interaction.response.send_message(embed=embed, ephemeral=True)
     log(f"♾️ Assinatura permanente criada para guild {guild_id}")
 
@@ -2648,36 +2705,36 @@ async def sair(
     if not is_creator(interaction.user.id):
         await interaction.response.send_message("❌ Apenas o criador do bot pode usar este comando.", ephemeral=True)
         return
-    
+
     # Parse do servidor ID
     try:
         guild_id = int(servidor_id)
     except ValueError:
         await interaction.response.send_message("❌ ID do servidor inválido.", ephemeral=True)
         return
-    
+
     # Busca o servidor
     guild = bot.get_guild(guild_id)
     if not guild:
         await interaction.response.send_message("❌ Servidor não encontrado.", ephemeral=True)
         return
-    
+
     guild_name = guild.name
-    
+
     # Remove assinatura
     db.remove_subscription(guild_id)
-    
+
     # Sai do servidor
     try:
         await guild.leave()
-        
+
         embed = discord.Embed(
             title="👋 Saiu do Servidor",
             description=f"Bot saiu do servidor **{guild_name}** (ID: `{guild_id}`)\nAssinatura removida.",
             color=0xFF9900
         )
         embed.set_footer(text=CREATOR_FOOTER)
-        
+
         await interaction.response.send_message(embed=embed, ephemeral=True)
         log(f"👋 Bot saiu do servidor {guild_name} ({guild_id}) por comando do criador")
     except Exception as e:
@@ -2699,7 +2756,7 @@ async def autorizar_servidor(
     if not is_creator(interaction.user.id):
         await interaction.response.send_message("❌ Apenas o criador do bot pode usar este comando.", ephemeral=True)
         return
-    
+
     # Permite usar no servidor auto-autorizado OU em DM
     if interaction.guild and interaction.guild.id != AUTO_AUTHORIZED_GUILD_ID:
         await interaction.response.send_message(
@@ -2707,19 +2764,19 @@ async def autorizar_servidor(
             ephemeral=True
         )
         return
-    
+
     # Parse do servidor ID
     try:
         guild_id = int(servidor_id)
     except ValueError:
         await interaction.response.send_message("❌ ID do servidor inválido.", ephemeral=True)
         return
-    
+
     # Verifica se é o próprio servidor auto-autorizado
     if guild_id == AUTO_AUTHORIZED_GUILD_ID:
         await interaction.response.send_message("ℹ️ Este servidor já é auto-autorizado permanentemente.", ephemeral=True)
         return
-    
+
     # Se não especificou duração, cria permanente
     if not duracao:
         db.create_subscription(guild_id, None)
@@ -2732,7 +2789,7 @@ async def autorizar_servidor(
         # Parse da duração
         duracao_str = duracao.lower().strip()
         duration_seconds = None
-        
+
         if duracao_str.endswith('d'):
             try:
                 days = int(duracao_str[:-1])
@@ -2749,19 +2806,19 @@ async def autorizar_servidor(
         else:
             await interaction.response.send_message("❌ Formato inválido. Use: 30d (dias) ou 60s (segundos)", ephemeral=True)
             return
-        
+
         db.create_subscription(guild_id, duration_seconds)
-        
+
         from datetime import datetime, timedelta
         expires_at = datetime.now() + timedelta(seconds=duration_seconds)
-        
+
         embed = discord.Embed(
             title="✅ Servidor Autorizado",
             description=f"Servidor ID `{guild_id}` autorizado por {duracao}",
             color=0x00FF00
         )
         embed.add_field(name="Expira em", value=expires_at.strftime('%d/%m/%Y %H:%M:%S'), inline=True)
-    
+
     embed.set_footer(text=CREATOR_FOOTER)
     await interaction.response.send_message(embed=embed, ephemeral=True)
     log(f"🔓 Servidor {guild_id} autorizado por {interaction.user.name}")
@@ -2776,24 +2833,24 @@ async def aviso_do_dev(
     if not is_creator(interaction.user.id):
         await interaction.response.send_message("❌ Apenas o criador do bot pode usar este comando.", ephemeral=True)
         return
-    
+
     # Parse do canal ID
     try:
         channel_id = int(canal_id)
     except ValueError:
         await interaction.response.send_message("❌ ID do canal inválido.", ephemeral=True)
         return
-    
+
     # Busca o canal
     channel = bot.get_channel(channel_id)
     if not channel:
         await interaction.response.send_message("❌ Canal não encontrado.", ephemeral=True)
         return
-    
+
     if not isinstance(channel, discord.TextChannel):
         await interaction.response.send_message("❌ O canal precisa ser um canal de texto.", ephemeral=True)
         return
-    
+
     # Envia a mensagem
     try:
         embed = discord.Embed(
@@ -2802,9 +2859,9 @@ async def aviso_do_dev(
             color=EMBED_COLOR
         )
         embed.set_footer(text=CREATOR_FOOTER)
-        
+
         await channel.send(embed=embed)
-        
+
         await interaction.response.send_message(f"✅ Mensagem enviada para {channel.mention}", ephemeral=True)
         log(f"📢 Aviso do dev enviado para canal {channel.name} ({channel.id})")
     except Exception as e:
@@ -2818,12 +2875,12 @@ async def aviso_de_atualizacao(interaction: discord.Interaction):
     if not is_creator(interaction.user.id):
         await interaction.response.send_message("❌ Apenas o criador do bot pode usar este comando.", ephemeral=True)
         return
-    
+
     await interaction.response.defer(ephemeral=True)
-    
+
     sent_count = 0
     failed_count = 0
-    
+
     for guild in bot.guilds:
         try:
             # Tenta encontrar um canal para enviar a mensagem
@@ -2835,22 +2892,22 @@ async def aviso_de_atualizacao(interaction: discord.Interaction):
                     if ch.permissions_for(guild.me).send_messages:
                         channel = ch
                         break
-            
+
             if not channel:
                 log(f"⚠️ Nenhum canal disponível em {guild.name}")
                 failed_count += 1
                 continue
-            
+
             # Busca o cargo de mediador configurado
             mediator_role_id = db.get_mediator_role(guild.id)
             role_mention = None
-            
+
             if mediator_role_id:
                 # Tenta buscar o cargo de mediador configurado
                 mediator_role = guild.get_role(mediator_role_id)
                 if mediator_role:
                     role_mention = mediator_role.mention
-            
+
             # Cria o embed (sem menção dentro)
             embed = discord.Embed(
                 title="⚠️ Atualização do Bot em 5 Minutos",
@@ -2868,10 +2925,10 @@ async def aviso_de_atualizacao(interaction: discord.Interaction):
                 color=0xFF9900
             )
             embed.set_footer(text=CREATOR_FOOTER)
-            
+
             if guild.icon:
                 embed.set_thumbnail(url=guild.icon.url)
-            
+
             # Envia a mensagem - menciona o cargo FORA do embed se configurado
             if role_mention:
                 # Marca o cargo ANTES do embed
@@ -2879,18 +2936,18 @@ async def aviso_de_atualizacao(interaction: discord.Interaction):
             else:
                 # Sem menção se não houver cargo configurado
                 await channel.send(embed=embed)
-            
+
             sent_count += 1
             log(f"✅ Aviso enviado para {guild.name} (canal: {channel.name})")
-            
+
             # Delay para evitar rate limit
             await asyncio.sleep(1)
-            
+
         except Exception as e:
             log(f"❌ Erro ao enviar aviso para {guild.name}: {e}")
             failed_count += 1
             continue
-    
+
     # Resposta final
     result_embed = discord.Embed(
         title="✅ Avisos Enviados",
@@ -2901,7 +2958,7 @@ async def aviso_de_atualizacao(interaction: discord.Interaction):
     result_embed.add_field(name="Falharam", value=str(failed_count), inline=True)
     result_embed.add_field(name="Total", value=str(len(bot.guilds)), inline=True)
     result_embed.set_footer(text=CREATOR_FOOTER)
-    
+
     await interaction.followup.send(embed=result_embed, ephemeral=True)
     log(f"📢 Avisos de atualização enviados: {sent_count}/{len(bot.guilds)} servidores")
 
@@ -2913,20 +2970,20 @@ async def check_expired_subscriptions():
     """Verifica assinaturas expiradas e remove o bot dos servidores"""
     try:
         log("🔍 Verificando assinaturas expiradas...")
-        
+
         expired_guilds = db.get_expired_subscriptions()
-        
+
         if not expired_guilds:
             log("✅ Nenhuma assinatura expirada")
             return
-        
+
         log(f"⚠️ {len(expired_guilds)} assinatura(s) expirada(s)")
-        
+
         for guild_id in expired_guilds:
             guild = bot.get_guild(guild_id)
             if guild:
                 log(f"⏰ Assinatura expirada: {guild.name} ({guild_id})")
-                
+
                 try:
                     # Tenta notificar o servidor
                     channel = None
@@ -2937,7 +2994,7 @@ async def check_expired_subscriptions():
                             if ch.permissions_for(guild.me).send_messages:
                                 channel = ch
                                 break
-                    
+
                     if channel:
                         embed = discord.Embed(
                             title="⏰ Assinatura Expirada",
@@ -2953,28 +3010,28 @@ async def check_expired_subscriptions():
                             inline=False
                         )
                         embed.set_footer(text=CREATOR_FOOTER)
-                        
+
                         await channel.send(embed=embed)
                         log(f"📨 Notificação enviada para {guild.name}")
-                    
+
                     await asyncio.sleep(5)
-                    
+
                     # Sai do servidor
                     await guild.leave()
                     log(f"👋 Bot saiu de {guild.name} (assinatura expirada)")
-                    
+
                 except Exception as e:
                     log(f"⚠️ Erro ao processar guild {guild_id}: {e}")
-                
+
                 # Remove a assinatura do banco
                 db.remove_subscription(guild_id)
             else:
                 # Servidor não encontrado, apenas remove a assinatura
                 db.remove_subscription(guild_id)
                 log(f"🗑️ Assinatura removida para guild {guild_id} (servidor não encontrado)")
-        
+
         log("✅ Verificação de assinaturas concluída")
-        
+
     except Exception as e:
         log(f"❌ Erro ao verificar assinaturas: {e}")
         logger.exception("Stacktrace:")
@@ -2992,23 +3049,23 @@ async def filter_health_check_logs(request, handler):
     """Middleware que evita logar health checks"""
     # Paths que não devem gerar logs
     silent_paths = ['/ping', '/health', '/']
-    
+
     # User-agents que não devem gerar logs
     silent_agents = ['Consul Health Check', 'UptimeRobot']
-    
+
     # Verificar se é uma requisição silenciosa
     is_silent = (
-        request.path in silent_paths or 
+        request.path in silent_paths or
         any(agent in request.headers.get('User-Agent', '') for agent in silent_agents)
     )
-    
+
     # Processar requisição normalmente
     response = await handler(request)
-    
+
     # Não logar se for health check
     if is_silent:
         return response
-    
+
     # Logar apenas requisições importantes
     log(f"{request.method} {request.path} - {response.status}")
     return response
@@ -3016,7 +3073,7 @@ async def filter_health_check_logs(request, handler):
 async def dashboard(request):
     """Endpoint principal - Dashboard com FAQ"""
     html_path = os.path.join(os.path.dirname(__file__), 'static', 'index.html')
-    
+
     try:
         with open(html_path, 'r', encoding='utf-8') as f:
             html_content = f.read()
@@ -3035,7 +3092,7 @@ async def health_check(request):
     """Endpoint de healthcheck para Fly.io/Railway"""
     bot_status = "online" if bot.is_ready() else "starting"
     return web.Response(
-        text=f"Bot Status: {bot_status}\nUptime: OK", 
+        text=f"Bot Status: {bot_status}\nUptime: OK",
         status=200,
         headers={'Content-Type': 'text/plain'}
     )
@@ -3048,10 +3105,10 @@ async def serve_static(request):
     """Serve arquivos estáticos (imagens, CSS, etc)"""
     filename = request.match_info.get('filename', '')
     file_path = os.path.join(os.path.dirname(__file__), 'static', filename)
-    
+
     if not os.path.exists(file_path):
         return web.Response(text="File not found", status=404)
-    
+
     # Determina o content type baseado na extensão
     content_type = 'application/octet-stream'
     if filename.endswith('.jpg') or filename.endswith('.jpeg'):
@@ -3064,7 +3121,7 @@ async def serve_static(request):
         content_type = 'text/css'
     elif filename.endswith('.js'):
         content_type = 'application/javascript'
-    
+
     with open(file_path, 'rb') as f:
         return web.Response(body=f.read(), content_type=content_type)
 
@@ -3116,8 +3173,6 @@ async def run_bot_with_webserver():
         logger.exception("Stacktrace completo:")
         raise
 
-
-# Esta função não é mais necessária - vamos usar apenas o bot principal
 
 async def run_bot_single():
     """Roda um único bot (modo econômico)"""

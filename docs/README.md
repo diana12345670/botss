@@ -1,5 +1,5 @@
 
-# 🎮 NZ Apostas - Sistema de Apostas Discord
+# 🎮 StormBet Apostas - Sistema de Apostas Discord
 
 Bot profissional de apostas para Discord com sistema de filas automáticas, mediação segura e histórico completo.
 
@@ -13,7 +13,7 @@ Bot profissional de apostas para Discord com sistema de filas automáticas, medi
 
 ## 🎯 Visão Geral
 
-O **NZ Apostas** é um bot Discord completo que automatiza todo o processo de apostas competitivas:
+O **StormBet Apostas** é um bot Discord completo que automatiza todo o processo de apostas competitivas:
 
 - ✅ Filas automáticas para diferentes modos de jogo
 - ✅ Criação automática de canais privados para cada aposta
@@ -85,9 +85,9 @@ Veja a [documentação completa de comandos](COMANDOS.md) para todos os detalhes
 
 Precisa de ajuda? Entre em contato:
 
-- 📧 Email: suporte@nzapostas.com
+- 📧 Email: suporte@stormbet.com
 - 💬 Discord: [Servidor de Suporte](https://discord.gg/seu-servidor)
-- 📱 Telegram: @nzapostas
+- 📱 Telegram: @stormbet
 
 ## 📄 Licença
 
@@ -95,4 +95,4 @@ Este bot é fornecido como serviço. Veja os [Termos de Uso](TERMOS.md) para mai
 
 ---
 
-**© 2025 NZ Apostas - Sistema Profissional de Apostas Discord**
+**© 2025 StormBet Apostas - Sistema Profissional de Apostas Discord**
