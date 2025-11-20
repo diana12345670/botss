@@ -151,20 +151,36 @@ class HybridDatabase:
         import psycopg2.extras
         conn = self.pg_pool.getconn()
         try:
-            # Usar RealDictCursor para obter JSONB como dict automaticamente
-            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            with conn.cursor() as cur:
                 cur.execute("SELECT data FROM stormbet_data WHERE id = 1")
                 row = cur.fetchone()
-                if row and row['data']:
-                    data = row['data']
-                    # Garantir que é um dict
+                if row and row[0]:
+                    data = row[0]
+                    # PostgreSQL retorna JSONB como dict automaticamente com psycopg2
                     if isinstance(data, str):
                         data = json.loads(data)
+                    
+                    # Validar estrutura de dados
                     if not isinstance(data, dict):
                         logger.error(f"❌ Dados do PostgreSQL não são dict: {type(data)}")
-                        raise ValueError("Dados corrompidos no PostgreSQL")
+                        # Tentar recuperar do backup JSON
+                        logger.warning("⚠️ Tentando recuperar do backup JSON...")
+                        return self._load_from_json()
+                    
+                    # Garantir que todas as chaves necessárias existem
+                    required_keys = ['queues', 'queue_timestamps', 'queue_metadata', 
+                                   'active_bets', 'bet_history', 'mediator_roles', 
+                                   'results_channels', 'subscriptions']
+                    for key in required_keys:
+                        if key not in data:
+                            data[key] = {} if key != 'bet_history' else []
+                    
                     return data
                 return self._get_empty_data()
+        except Exception as e:
+            logger.error(f"❌ Erro ao carregar do PostgreSQL: {e}")
+            logger.warning("⚠️ Usando backup JSON como fallback")
+            return self._load_from_json()
         finally:
             self.pg_pool.putconn(conn)
     
@@ -479,7 +495,7 @@ class HybridDatabase:
             data['queue_metadata'] = {}
 
         queue_id = f"{mode}_{message_id}"
-        data['queue_metadata'][str(message_id)] = {
+        metadata = {
             'queue_id': queue_id,
             'mode': mode,
             'bet_value': bet_value,
@@ -488,9 +504,17 @@ class HybridDatabase:
             'message_id': int(message_id),
             'currency_type': currency_type
         }
+        data['queue_metadata'][str(message_id)] = metadata
         
-        logger.info(f"✅ Metadados salvos: queue_id={queue_id}, bet_value={bet_value}, mediator_fee={mediator_fee}, currency={currency_type}")
+        logger.info(f"💾 Salvando metadados no banco: queue_id={queue_id}, bet_value={bet_value}, mediator_fee={mediator_fee}, currency={currency_type}")
         self._save_data(data)
+        
+        # Verificar se foi salvo corretamente
+        saved_data = self._load_data()
+        if str(message_id) in saved_data.get('queue_metadata', {}):
+            logger.info(f"✅ Metadados verificados no banco: {len(saved_data['queue_metadata'])} filas total")
+        else:
+            logger.error(f"❌ FALHA ao salvar metadados para mensagem {message_id}!")
 
     def get_queue_metadata(self, message_id: int) -> Optional[dict]:
         """Retorna metadados de uma fila pelo message_id"""
@@ -555,11 +579,28 @@ class HybridDatabase:
         return False
 
     def create_subscription(self, guild_id: int, duration_seconds: int = None):
-        """Cria ou atualiza uma assinatura para um servidor"""
+        """Cria ou atualiza uma assinatura para um servidor
+        
+        IMPORTANTE: Sempre cria a nova assinatura ANTES de remover a antiga,
+        garantindo que o servidor nunca perca acesso durante a transição.
+        """
         data = self._load_data()
         if 'subscriptions' not in data:
             data['subscriptions'] = {}
         
+        # Verifica se já existe assinatura ativa
+        guild_id_str = str(guild_id)
+        old_subscription = data['subscriptions'].get(guild_id_str)
+        
+        if old_subscription:
+            logger.info(f"🔄 Substituindo assinatura existente para guild {guild_id}")
+            if old_subscription.get('permanent'):
+                logger.info(f"   Antiga: Permanente")
+            else:
+                old_expires = old_subscription.get('expires_at')
+                logger.info(f"   Antiga: Expira em {old_expires}")
+        
+        # Cria NOVA assinatura (isso garante que o servidor continue ativo)
         subscription = {
             'guild_id': guild_id,
             'permanent': duration_seconds is None,
@@ -569,13 +610,16 @@ class HybridDatabase:
         if duration_seconds is not None:
             expires_at = datetime.now() + timedelta(seconds=duration_seconds)
             subscription['expires_at'] = expires_at.isoformat()
-            logger.info(f"📝 Assinatura criada para guild {guild_id} até {expires_at}")
+            logger.info(f"✅ Nova assinatura criada para guild {guild_id} até {expires_at}")
         else:
             subscription['expires_at'] = None
-            logger.info(f"♾️ Assinatura permanente criada para guild {guild_id}")
+            logger.info(f"✅ Nova assinatura PERMANENTE criada para guild {guild_id}")
         
-        data['subscriptions'][str(guild_id)] = subscription
+        # Substitui a assinatura antiga pela nova de forma atômica
+        data['subscriptions'][guild_id_str] = subscription
         self._save_data(data)
+        
+        logger.info(f"🔒 Transição de assinatura concluída sem desconexão para guild {guild_id}")
 
     def get_subscription(self, guild_id: int) -> Optional[dict]:
         """Retorna a assinatura de um servidor"""
