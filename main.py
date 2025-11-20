@@ -1338,9 +1338,10 @@ async def on_ready():
             message_id = metadata['message_id']
             mode = metadata['mode']
             bet_value = metadata['bet_value']
+            currency_type = metadata.get('currency_type', 'sonhos')
 
-            # Restaura no dicionário em memória
-            queue_messages[queue_id] = (channel_id, message_id, mode, bet_value)
+            # Restaura no dicionário em memória (com currency_type)
+            queue_messages[queue_id] = (channel_id, message_id, mode, bet_value, currency_type)
 
             # Log detalhado de cada fila recuperada
             current_queue = db.get_queue(queue_id)
@@ -1591,6 +1592,8 @@ async def preset_filas(interaction: discord.Interaction, modo: app_commands.Choi
     log(f"🎯 Criando preset de filas: modo={mode}, moeda={currency_type}, taxa={taxa_str}")
     
     created_count = 0
+    tasks = []
+    
     for valor_numerico in preset_values:
         try:
             # Calcula a taxa para cada valor
@@ -1634,7 +1637,7 @@ async def preset_filas(interaction: discord.Interaction, modo: app_commands.Choi
                 embed.set_thumbnail(url=interaction.guild.icon.url)
             embed.set_footer(text=CREATOR_FOOTER)
 
-            # Envia a mensagem primeiro
+            # Envia a mensagem primeiro SEM botão (mais rápido)
             message = await interaction.channel.send(embed=embed)
 
             log(f"📋 Fila preset criada: {valor_formatado} (ID: {message.id})")
@@ -1642,24 +1645,29 @@ async def preset_filas(interaction: discord.Interaction, modo: app_commands.Choi
             # Cria o view COM o message_id correto
             view = QueueButton(mode, valor_numerico, taxa_numerica, message.id, currency_type)
 
-            # Salva os metadados da fila no banco de dados ANTES de editar a mensagem
+            # Salva os metadados da fila no banco de dados
             queue_id = f"{mode}_{message.id}"
             db.save_queue_metadata(message.id, mode, valor_numerico, taxa_numerica, interaction.channel.id, currency_type)
 
             # Salva a informação da fila em memória
             queue_messages[queue_id] = (interaction.channel.id, message.id, mode, valor_numerico, currency_type)
 
-            # Agora edita a mensagem com os botões
-            await message.edit(embed=embed, view=view)
-            
+            # Adiciona a tarefa de editar com botões à lista (será executado em batch)
+            tasks.append((message, embed, view, valor_formatado))
             created_count += 1
-            
-            # Pequeno delay para evitar rate limit do Discord
-            await asyncio.sleep(0.5)
             
         except Exception as e:
             log(f"❌ Erro ao criar fila preset para valor {valor_numerico}: {e}")
             continue
+    
+    # AGORA adiciona os botões em todas as filas de uma vez (muito mais rápido!)
+    log(f"⚡ Adicionando botões em {len(tasks)} filas...")
+    for message, embed, view, valor_formatado in tasks:
+        try:
+            await message.edit(embed=embed, view=view)
+            log(f"✅ Botão adicionado em {valor_formatado}")
+        except Exception as e:
+            log(f"❌ Erro ao adicionar botão em {valor_formatado}: {e}")
     
     # Confirma criação
     await interaction.followup.send(
@@ -2988,12 +2996,37 @@ async def ping(request):
     """Endpoint simples de ping"""
     return web.Response(text="pong", status=200)
 
+async def serve_static(request):
+    """Serve arquivos estáticos (imagens, CSS, etc)"""
+    filename = request.match_info.get('filename', '')
+    file_path = os.path.join(os.path.dirname(__file__), 'static', filename)
+    
+    if not os.path.exists(file_path):
+        return web.Response(text="File not found", status=404)
+    
+    # Determina o content type baseado na extensão
+    content_type = 'application/octet-stream'
+    if filename.endswith('.jpg') or filename.endswith('.jpeg'):
+        content_type = 'image/jpeg'
+    elif filename.endswith('.png'):
+        content_type = 'image/png'
+    elif filename.endswith('.gif'):
+        content_type = 'image/gif'
+    elif filename.endswith('.css'):
+        content_type = 'text/css'
+    elif filename.endswith('.js'):
+        content_type = 'application/javascript'
+    
+    with open(file_path, 'rb') as f:
+        return web.Response(body=f.read(), content_type=content_type)
+
 async def start_web_server():
     """Inicia servidor HTTP para healthcheck e dashboard"""
     app = web.Application(middlewares=[filter_health_check_logs])
     app.router.add_get('/', dashboard)
     app.router.add_get('/health', health_check)
     app.router.add_get('/ping', ping)
+    app.router.add_get('/{filename}', serve_static)
 
     runner = web.AppRunner(app)
     await runner.setup()
