@@ -1419,6 +1419,54 @@ async def on_ready():
         log('✅ Verificação inicial de servidores concluída')
 
 
+@bot.event
+async def on_disconnect():
+    """Evento disparado quando o bot perde conexão com o Discord"""
+    log("⚠️ BOT DESCONECTADO DO DISCORD")
+    log("🔄 Tentando reconectar automaticamente...")
+
+@bot.event
+async def on_resumed():
+    """Evento disparado quando o bot retoma a conexão após desconexão"""
+    log("=" * 50)
+    log("✅ BOT RECONECTADO AO DISCORD!")
+    log("=" * 50)
+    log(f'👤 Sessão retomada: {bot.user}')
+    log(f'🌐 Servidores: {len(bot.guilds)}')
+    
+    # PROTEÇÃO EXTRA: Verifica se queue_messages está sincronizado com o banco
+    try:
+        all_metadata = db.get_all_queue_metadata()
+        
+        # Se queue_messages estiver vazio mas há metadados no banco, recupera
+        if not queue_messages and all_metadata:
+            log('⚠️ Detectado queue_messages vazio após reconexão - recuperando do banco...')
+            for message_id_str, metadata in all_metadata.items():
+                queue_id = metadata['queue_id']
+                channel_id = metadata['channel_id']
+                message_id = metadata['message_id']
+                mode = metadata['mode']
+                bet_value = metadata['bet_value']
+                currency_type = metadata.get('currency_type', 'sonhos')
+                queue_messages[queue_id] = (channel_id, message_id, mode, bet_value, currency_type)
+            log(f'✅ {len(all_metadata)} filas recuperadas após reconexão')
+        else:
+            log(f'✅ queue_messages sincronizado: {len(queue_messages)} filas em memória')
+    except Exception as e:
+        log(f'⚠️ Erro ao verificar sincronização de filas após reconexão: {e}')
+
+@bot.event
+async def on_connect():
+    """Evento disparado quando o bot estabelece conexão (primeira vez ou reconexão)"""
+    log("🔌 Conexão estabelecida com o Discord Gateway")
+
+@bot.event
+async def on_error(event, *args, **kwargs):
+    """Captura erros não tratados do bot para evitar crashes silenciosos"""
+    logger.exception(f"❌ Erro não tratado no evento {event}:")
+    log(f"⚠️ Erro no evento {event} - bot continuará rodando")
+
+
 @bot.tree.command(name="mostrar-fila", description="[MODERADOR] Criar mensagem com botão para entrar na fila")
 @app_commands.describe(
     modo="Escolha o modo de jogo",
