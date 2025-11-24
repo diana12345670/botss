@@ -1536,28 +1536,37 @@ def register_all_commands(target_bot):
     
     # Copia todos os comandos (grupos e comandos individuais)
     for command in bot.tree.walk_commands():
-        # Se for um comando de grupo, copia o grupo inteiro
-        if isinstance(command, app_commands.Group):
-            target_bot.tree.add_command(command.copy())
-        # Se for um comando normal, copia individualmente
-        elif isinstance(command, app_commands.Command):
-            # Cria uma cópia profunda do comando com callback preservado
-            new_command = app_commands.Command(
-                name=command.name,
-                description=command.description,
-                callback=command.callback,
-                parent=command.parent
-            )
-            # Copia todos os parâmetros e metadados
-            new_command._params = command._params.copy()
-            new_command.extras = command.extras.copy() if command.extras else {}
-            new_command.guild_ids = command.guild_ids.copy() if command.guild_ids else None
-            
-            try:
+        try:
+            # Se for um comando de grupo, copia o grupo inteiro
+            if isinstance(command, app_commands.Group):
+                target_bot.tree.add_command(command.copy())
+                log(f"  ✅ Grupo /{command.name} copiado")
+            # Se for um comando normal, copia individualmente
+            elif isinstance(command, app_commands.Command):
+                # Cria uma cópia profunda do comando com callback preservado
+                new_command = app_commands.Command(
+                    name=command.name,
+                    description=command.description,
+                    callback=command.callback,
+                    parent=command.parent
+                )
+                # Copia parâmetros
+                if hasattr(command, '_params'):
+                    new_command._params = command._params.copy()
+                
+                # Copia extras se existir
+                if hasattr(command, 'extras') and command.extras:
+                    new_command.extras = command.extras.copy()
+                
+                # Copia guild_ids apenas se existir
+                if hasattr(command, 'guild_ids') and command.guild_ids:
+                    new_command.guild_ids = command.guild_ids.copy()
+                
                 target_bot.tree.add_command(new_command)
                 log(f"  ✅ Comando /{command.name} copiado")
-            except Exception as e:
-                log(f"  ⚠️ Erro ao copiar comando /{command.name}: {e}")
+        except Exception as e:
+            log(f"  ⚠️ Erro ao copiar comando /{command.name}: {e}")
+            logger.exception("Stacktrace completo:")
     
     log(f"✅ Comandos copiados para o bot alvo")
 
