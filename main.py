@@ -46,11 +46,14 @@ queue_locks_creation_lock = _asyncio_init.Lock()
 # Detectar ambiente de execução
 IS_FLYIO = os.getenv("FLY_APP_NAME") is not None
 IS_RAILWAY = os.getenv("RAILWAY_ENVIRONMENT") is not None or os.getenv("RAILWAY_STATIC_URL") is not None
+IS_RENDER = os.getenv("RENDER") is not None or os.getenv("RENDER_SERVICE_NAME") is not None
 
 if IS_FLYIO:
     log("✈️ Detectado ambiente Fly.io")
 elif IS_RAILWAY:
     log("🚂 Detectado ambiente Railway")
+elif IS_RENDER:
+    log("🎨 Detectado ambiente Render")
 else:
     log("💻 Detectado ambiente Replit/Local")
 
@@ -3176,26 +3179,96 @@ async def run_bot_with_webserver():
 
 async def run_bot_single():
     """Roda um único bot (modo econômico)"""
-    token = os.getenv("TOKEN") or os.getenv("DISCORD_TOKEN") or os.getenv("DISCORD_TOKEN_1") or ""
+    token = os.getenv("TOKEN") or os.getenv("DISCORD_TOKEN") or os.getenv("TOKEN_1") or ""
     if not token:
         raise Exception("Configure DISCORD_TOKEN nas variáveis de ambiente.")
 
     log("🤖 Modo econômico: Iniciando 1 bot...")
     await bot.start(token, reconnect=True)
 
-async def run_multiple_bots():
-    """Roda o bot com o primeiro token disponível"""
-    # Pegar o primeiro token disponível
-    token = os.getenv("TOKEN") or os.getenv("DISCORD_TOKEN_1") or os.getenv("DISCORD_TOKEN") or ""
+def create_bot_instance():
+    """Cria uma nova instância do bot com a mesma configuração"""
+    return commands.Bot(
+        command_prefix="!",
+        intents=intents,
+        chunk_guilds_at_startup=False,
+        member_cache_flags=discord.MemberCacheFlags.none(),
+        max_messages=10
+    )
 
-    if not token:
-        raise Exception("Configure DISCORD_TOKEN nas variáveis de ambiente.")
-
-    log(f"🤖 Iniciando bot...")
-    # SEGURANÇA: Não logar o token do Discord
-
-    # Usar o bot principal que já tem todos os comandos registrados
-    await bot.start(token, reconnect=True)
+async def run_bot_with_token():
+    """Inicia o bot com o(s) token(s) disponível(eis)"""
+    # Buscar tokens nas variáveis de ambiente
+    # Prioridade: Se tem TOKEN ou DISCORD_TOKEN, usa apenas 1 bot
+    if os.getenv("TOKEN") or os.getenv("DISCORD_TOKEN"):
+        token = os.getenv("TOKEN") or os.getenv("DISCORD_TOKEN")
+        log("🤖 Iniciando bot Discord (token único via TOKEN/DISCORD_TOKEN)...")
+        await bot.start(token, reconnect=True)
+        return
+    
+    # Caso contrário, verifica TOKEN_1 e TOKEN_2
+    token1 = os.getenv("TOKEN_1")
+    token2 = os.getenv("TOKEN_2")
+    
+    if not token1:
+        raise Exception("Configure TOKEN, DISCORD_TOKEN ou TOKEN_1 nas variáveis de ambiente.")
+    
+    # Se só tem TOKEN_1, roda 1 bot
+    if not token2:
+        log("🤖 Iniciando bot Discord (token único via TOKEN_1)...")
+        await bot.start(token1, reconnect=True)
+        return
+    
+    # Se tem TOKEN_1 e TOKEN_2, roda 2 bots em paralelo
+    log("🤖 Detectados 2 tokens (TOKEN_1 e TOKEN_2) - iniciando 2 bots em paralelo...")
+    
+    # Criar segunda instância do bot
+    bot2 = create_bot_instance()
+    
+    # Copiar todos os comandos do bot principal para bot2
+    log("📋 Copiando comandos para segundo bot...")
+    for cmd in bot.tree.walk_commands():
+        try:
+            bot2.tree.add_command(cmd.copy())
+        except Exception as e:
+            log(f"⚠️ Erro ao copiar comando {cmd.name}: {e}")
+    
+    # Criar event handler on_ready específico para bot2
+    @bot2.event
+    async def on_ready():
+        log("=" * 50)
+        log("✅ BOT #2 CONECTADO AO DISCORD!")
+        log("=" * 50)
+        log(f'👤 Usuário: {bot2.user}')
+        log(f'📛 Nome: {bot2.user.name}')
+        log(f'🆔 ID: {bot2.user.id}')
+        log(f'🌐 Servidores: {len(bot2.guilds)}')
+        
+        # Sincronizar comandos do bot2
+        try:
+            log("🔄 Bot #2: Sincronizando comandos slash...")
+            synced = await bot2.tree.sync(guild=None)
+            log(f'✅ Bot #2: {len(synced)} comandos sincronizados')
+        except Exception as e:
+            log(f'⚠️ Bot #2: Erro ao sincronizar comandos: {e}')
+    
+    # Adicionar views persistentes para bot2
+    bot2.add_view(QueueButton(mode="", bet_value=0, mediator_fee=0, currency_type="sonhos"))
+    bot2.add_view(ConfirmPaymentButton(bet_id=""))
+    bot2.add_view(AcceptMediationButton(bet_id=""))
+    
+    # Funções auxiliares para iniciar cada bot
+    async def start_bot1():
+        log("🤖 Bot #1: Conectando ao Discord...")
+        await bot.start(token1, reconnect=True)
+    
+    async def start_bot2():
+        log("🤖 Bot #2: Conectando ao Discord...")
+        await bot2.start(token2, reconnect=True)
+    
+    # Rodar ambos em paralelo
+    log("🚀 Iniciando ambos os bots...")
+    await asyncio.gather(start_bot1(), start_bot2())
 
 try:
     if IS_FLYIO:
@@ -3213,11 +3286,9 @@ try:
             await asyncio.sleep(1)
             log("✅ Servidor HTTP rodando")
 
-            # No Fly.io, suporta múltiplos bots (até 3)
-            log("🤖 Fly.io: Modo múltiplos bots")
-            log("💡 Configure DISCORD_TOKEN_1, DISCORD_TOKEN_2, DISCORD_TOKEN_3")
-            log("🚀 Iniciando bots Discord...")
-            await run_multiple_bots()
+            # Iniciar bot
+            log("🚀 Iniciando bot Discord...")
+            await run_bot_with_token()
 
         asyncio.run(run_flyio())
 
@@ -3229,24 +3300,43 @@ try:
             await start_web_server()
             await asyncio.sleep(1)
 
-            # No Railway, usar apenas 1 bot por deployment
-            token = os.getenv("TOKEN") or os.getenv("DISCORD_TOKEN") or os.getenv("DISCORD_TOKEN_1") or ""
-            if not token:
-                raise Exception("Configure DISCORD_TOKEN nas variáveis de ambiente")
-
-            log("🤖 Railway: Modo single bot")
-            await bot.start(token, reconnect=True)
+            # Iniciar bot
+            await run_bot_with_token()
 
         asyncio.run(run_all())
+    
+    elif IS_RENDER:
+        log("=" * 60)
+        log("🎨  INICIANDO NO RENDER")
+        log("=" * 60)
+        log(f"📍 Service: {os.getenv('RENDER_SERVICE_NAME', 'N/A')}")
+        log(f"🌍 Region: {os.getenv('RENDER_REGION', 'N/A')}")
+        log("💡 Para múltiplos bots: crie múltiplos Web Services no Render")
+        log("💡 Cada serviço usa um TOKEN diferente")
+        log("💡 Todos compartilham o mesmo DATABASE_URL")
+        
+        async def run_render():
+            # Iniciar servidor web primeiro
+            log("📡 Iniciando servidor HTTP...")
+            await start_web_server()
+            await asyncio.sleep(1)
+            log("✅ Servidor HTTP rodando")
+            
+            # Iniciar bot
+            log("🚀 Iniciando bot Discord...")
+            await run_bot_with_token()
+        
+        asyncio.run(run_render())
+    
     else:
-        log("Iniciando bots no Replit/Local com servidor HTTP...")
+        log("Iniciando bot no Replit/Local com servidor HTTP...")
 
         async def run_replit():
             # Iniciar servidor web primeiro
             await start_web_server()
             await asyncio.sleep(1)
-            # No Replit, pode rodar múltiplos bots se necessário
-            await run_multiple_bots()
+            # Iniciar bot
+            await run_bot_with_token()
 
         asyncio.run(run_replit())
 

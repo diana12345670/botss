@@ -29,7 +29,7 @@ class HybridDatabase:
         # Detectar ambiente
         self.is_flyio = os.getenv("FLY_APP_NAME") is not None
         self.is_railway = os.getenv("RAILWAY_ENVIRONMENT") is not None or os.getenv("RAILWAY_STATIC_URL") is not None
-        self.is_render = os.getenv("RENDER") is not None
+        self.is_render = os.getenv("RENDER") is not None or os.getenv("RENDER_SERVICE_NAME") is not None
         
         # Definir diretório de dados
         if self.is_flyio or self.is_railway or self.is_render:
