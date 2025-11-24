@@ -1527,6 +1527,41 @@ async def on_connect():
     log("🔌 Conexão estabelecida com o Discord Gateway")
 
 
+def register_all_commands(target_bot):
+    """
+    Copia todos os comandos do bot principal para outro bot.
+    Usa método nativo do discord.py para garantir compatibilidade total.
+    """
+    log(f"📋 Copiando comandos do bot principal para o bot alvo...")
+    
+    # Copia todos os comandos (grupos e comandos individuais)
+    for command in bot.tree.walk_commands():
+        # Se for um comando de grupo, copia o grupo inteiro
+        if isinstance(command, app_commands.Group):
+            target_bot.tree.add_command(command.copy())
+        # Se for um comando normal, copia individualmente
+        elif isinstance(command, app_commands.Command):
+            # Cria uma cópia profunda do comando com callback preservado
+            new_command = app_commands.Command(
+                name=command.name,
+                description=command.description,
+                callback=command.callback,
+                parent=command.parent
+            )
+            # Copia todos os parâmetros e metadados
+            new_command._params = command._params.copy()
+            new_command.extras = command.extras.copy() if command.extras else {}
+            new_command.guild_ids = command.guild_ids.copy() if command.guild_ids else None
+            
+            try:
+                target_bot.tree.add_command(new_command)
+                log(f"  ✅ Comando /{command.name} copiado")
+            except Exception as e:
+                log(f"  ⚠️ Erro ao copiar comando /{command.name}: {e}")
+    
+    log(f"✅ Comandos copiados para o bot alvo")
+
+
 @bot.tree.command(name="mostrar-fila", description="[MODERADOR] Criar mensagem com botão para entrar na fila")
 @app_commands.describe(
     modo="Escolha o modo de jogo",
@@ -3225,13 +3260,10 @@ async def run_bot_with_token():
     # Criar segunda instância do bot
     bot2 = create_bot_instance()
     
-    # Copiar todos os comandos do bot principal para bot2
-    log("📋 Copiando comandos para segundo bot...")
-    for cmd in bot.tree.walk_commands():
-        try:
-            bot2.tree.add_command(cmd.copy())
-        except Exception as e:
-            log(f"⚠️ Erro ao copiar comando {cmd.name}: {e}")
+    # Registrar todos os comandos no bot2
+    log("📋 Registrando comandos no segundo bot...")
+    register_all_commands(bot2)
+    log(f"✅ Comandos registrados no bot2")
     
     # Criar event handler on_ready específico para bot2
     @bot2.event
@@ -3249,6 +3281,8 @@ async def run_bot_with_token():
             log("🔄 Bot #2: Sincronizando comandos slash...")
             synced = await bot2.tree.sync(guild=None)
             log(f'✅ Bot #2: {len(synced)} comandos sincronizados')
+            for cmd in synced:
+                log(f'  - /{cmd.name}')
         except Exception as e:
             log(f'⚠️ Bot #2: Erro ao sincronizar comandos: {e}')
     
