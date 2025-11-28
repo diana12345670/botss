@@ -1139,6 +1139,251 @@ class AcceptMediationButton(discord.ui.View):
             pass
 
 
+# ==================== CENTRAL DE MEDIADORES ====================
+
+class MediatorCentralPixModal(discord.ui.Modal, title='Informe sua Chave PIX'):
+    """Modal para mediador informar seu PIX ao entrar no central"""
+    pix_key = discord.ui.TextInput(
+        label='Chave PIX',
+        placeholder='Digite sua chave PIX (CPF, telefone, email, etc)',
+        required=True,
+        max_length=100
+    )
+
+    def __init__(self, guild_id: int):
+        super().__init__()
+        self.guild_id = guild_id
+
+    async def on_submit(self, interaction: discord.Interaction):
+        user_id = interaction.user.id
+        pix = str(self.pix_key.value).strip()
+        
+        # Salva o PIX para próximas vezes
+        db.save_mediator_pix(user_id, pix)
+        
+        # Adiciona ao central
+        success = db.add_mediator_to_central(self.guild_id, user_id, pix)
+        
+        if not success:
+            await interaction.response.send_message(
+                "O Central de Mediadores está cheio (10 vagas). Tente novamente mais tarde.",
+                ephemeral=True
+            )
+            return
+        
+        # Atualiza o painel do central
+        await update_mediator_central_panel(interaction.guild)
+        
+        await interaction.response.send_message(
+            f"Você entrou no Central de Mediadores!\n"
+            f"Seu PIX foi salvo e será usado automaticamente nas próximas vezes.\n"
+            f"Você será atribuído automaticamente quando uma aposta começar.\n"
+            f"**Atenção:** Você será removido após 2 horas sem apostas.",
+            ephemeral=True
+        )
+        log(f"✅ Mediador {user_id} entrou no central do guild {self.guild_id}")
+
+
+class MediatorCentralView(discord.ui.View):
+    """View do painel do Central de Mediadores"""
+    def __init__(self, guild_id: int = None):
+        super().__init__(timeout=None)
+        self.guild_id = guild_id
+
+    @discord.ui.button(label='Aguardar Aposta', style=discord.ButtonStyle.green, custom_id='persistent:mediator_central_join', emoji='⏳')
+    async def join_central_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        user_id = interaction.user.id
+        guild_id = interaction.guild.id
+        
+        log(f"👆 Mediador {user_id} clicou em 'Aguardar Aposta' no central")
+        
+        # Verifica se tem cargo de mediador
+        mediator_role_id = db.get_mediator_role(guild_id)
+        has_mediator_role = mediator_role_id and discord.utils.get(interaction.user.roles, id=mediator_role_id) is not None
+        
+        if not has_mediator_role:
+            if mediator_role_id:
+                await interaction.response.send_message(
+                    f"Você precisa ter o cargo <@&{mediator_role_id}> para entrar no central.",
+                    ephemeral=True
+                )
+            else:
+                await interaction.response.send_message(
+                    "Este servidor ainda não configurou um cargo de mediador.\n"
+                    "Um administrador deve usar /setup @cargo para configurar.",
+                    ephemeral=True
+                )
+            return
+        
+        # Verifica se já está no central
+        if db.is_mediator_in_central(guild_id, user_id):
+            await interaction.response.send_message(
+                "Você já está no Central de Mediadores aguardando apostas.",
+                ephemeral=True
+            )
+            return
+        
+        # Verifica se já tem PIX salvo
+        saved_pix = db.get_mediator_pix(user_id)
+        
+        if saved_pix:
+            # PIX já salvo - entra direto
+            success = db.add_mediator_to_central(guild_id, user_id, saved_pix)
+            
+            if not success:
+                await interaction.response.send_message(
+                    "O Central de Mediadores está cheio (10 vagas). Tente novamente mais tarde.",
+                    ephemeral=True
+                )
+                return
+            
+            # Atualiza o painel
+            await update_mediator_central_panel(interaction.guild)
+            
+            await interaction.response.send_message(
+                f"Você entrou no Central de Mediadores!\n"
+                f"Usando seu PIX salvo: `{saved_pix}`\n"
+                f"Você será atribuído automaticamente quando uma aposta começar.\n"
+                f"**Atenção:** Você será removido após 2 horas sem apostas.",
+                ephemeral=True
+            )
+            log(f"✅ Mediador {user_id} entrou no central (PIX já salvo)")
+        else:
+            # Precisa informar PIX - abre modal
+            await interaction.response.send_modal(MediatorCentralPixModal(guild_id))
+
+    @discord.ui.button(label='Sair do Central', style=discord.ButtonStyle.gray, custom_id='persistent:mediator_central_leave', emoji='🚪')
+    async def leave_central_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        user_id = interaction.user.id
+        guild_id = interaction.guild.id
+        
+        if not db.is_mediator_in_central(guild_id, user_id):
+            await interaction.response.send_message(
+                "Você não está no Central de Mediadores.",
+                ephemeral=True
+            )
+            return
+        
+        db.remove_mediator_from_central(guild_id, user_id)
+        
+        # Atualiza o painel
+        await update_mediator_central_panel(interaction.guild)
+        
+        await interaction.response.send_message(
+            "Você saiu do Central de Mediadores.",
+            ephemeral=True
+        )
+        log(f"🚪 Mediador {user_id} saiu do central do guild {guild_id}")
+
+
+async def update_mediator_central_panel(guild: discord.Guild):
+    """Atualiza o painel do central de mediadores com a lista atual"""
+    config = db.get_mediator_central_config(guild.id)
+    if not config:
+        return
+    
+    try:
+        channel = guild.get_channel(config['channel_id'])
+        if not channel:
+            return
+        
+        message = await channel.fetch_message(config['message_id'])
+        
+        mediators = db.get_mediators_in_central(guild.id)
+        vagas_ocupadas = len(mediators)
+        vagas_disponiveis = 10 - vagas_ocupadas
+        
+        # Monta lista de mediadores
+        if mediators:
+            mediators_list = []
+            for i, (user_id_str, data) in enumerate(mediators.items(), 1):
+                mediators_list.append(f"{i}. <@{user_id_str}>")
+            mediators_text = "\n".join(mediators_list)
+        else:
+            mediators_text = "*Nenhum mediador aguardando*"
+        
+        embed = discord.Embed(
+            title="Central de Mediadores",
+            description="Mediadores podem aguardar aqui para serem atribuídos automaticamente às apostas.",
+            color=EMBED_COLOR
+        )
+        embed.add_field(
+            name=f"Mediadores na Fila ({vagas_ocupadas}/10)",
+            value=mediators_text,
+            inline=False
+        )
+        embed.add_field(
+            name="Vagas Disponíveis",
+            value=f"{vagas_disponiveis} vagas",
+            inline=True
+        )
+        embed.add_field(
+            name="Timeout",
+            value="2 horas",
+            inline=True
+        )
+        embed.add_field(
+            name="Como Funciona",
+            value="1. Clique em **Aguardar Aposta**\n"
+                  "2. Informe seu PIX (apenas na primeira vez)\n"
+                  "3. Aguarde ser atribuído automaticamente\n"
+                  "4. Após 2h sem apostas, você será removido",
+            inline=False
+        )
+        if guild.icon:
+            embed.set_thumbnail(url=guild.icon.url)
+        embed.set_footer(text=CREATOR_FOOTER)
+        
+        await message.edit(embed=embed)
+        log(f"📋 Painel do central atualizado: {vagas_ocupadas}/10 mediadores")
+        
+    except discord.NotFound:
+        log(f"⚠️ Mensagem do central não encontrada - removendo configuração")
+        db.delete_mediator_central_config(guild.id)
+    except Exception as e:
+        log(f"❌ Erro ao atualizar painel do central: {e}")
+
+
+async def cleanup_expired_mediators_central():
+    """Tarefa em background que remove mediadores que estão há mais de 2 horas no central"""
+    await bot.wait_until_ready()
+    log("⏰ Iniciando limpeza de mediadores expirados do central (a cada 10 minutos)")
+    
+    while not bot.is_closed():
+        try:
+            await asyncio.sleep(600)  # 10 minutos
+            
+            # Verifica todos os servidores com central configurado
+            for guild in bot.guilds:
+                if not db.is_mediator_central_configured(guild.id):
+                    continue
+                
+                expired = db.get_expired_mediators_in_central(guild.id, timeout_hours=2)
+                
+                if expired:
+                    for user_id in expired:
+                        db.remove_mediator_from_central(guild.id, user_id)
+                        log(f"⏰ Mediador {user_id} removido do central por timeout (2h)")
+                        
+                        # Tenta notificar o mediador via DM
+                        try:
+                            user = await bot.fetch_user(user_id)
+                            await user.send(
+                                f"Você foi removido do **Central de Mediadores** no servidor **{guild.name}** "
+                                f"por ficar 2 horas sem receber apostas.\n\n"
+                                f"Você pode entrar novamente a qualquer momento!"
+                            )
+                        except:
+                            pass
+                    
+                    # Atualiza o painel
+                    await update_mediator_central_panel(guild)
+                    
+        except Exception as e:
+            log(f"❌ Erro na limpeza de mediadores do central: {e}")
+            await asyncio.sleep(600)
+
+
 async def cleanup_orphaned_data_task():
     """Tarefa em background que limpa dados órfãos a cada 10 minutos"""
     await bot.wait_until_ready()
@@ -1376,8 +1621,9 @@ async def on_ready():
         bot.add_view(QueueButton(mode="", bet_value=0, mediator_fee=0, currency_type="sonhos"))
         bot.add_view(ConfirmPaymentButton(bet_id=""))
         bot.add_view(AcceptMediationButton(bet_id=""))
+        bot.add_view(MediatorCentralView())
         bot._persistent_views_registered = True
-        log('✅ Views persistentes registradas (QueueButton, ConfirmPaymentButton, AcceptMediationButton)')
+        log('✅ Views persistentes registradas (QueueButton, ConfirmPaymentButton, AcceptMediationButton, MediatorCentralView)')
     else:
         log('ℹ️ Views persistentes já estavam registradas')
 
@@ -1420,6 +1666,7 @@ async def on_ready():
     if not hasattr(bot, '_cleanup_task_started'):
         bot.loop.create_task(cleanup_expired_queues())
         bot.loop.create_task(cleanup_orphaned_data_task())
+        bot.loop.create_task(cleanup_expired_mediators_central())
         bot._cleanup_task_started = True
         log('🧹 Tarefas de limpeza iniciadas')
     else:
@@ -2004,22 +2251,142 @@ async def create_bet_channel(guild: discord.Guild, mode: str, player1_id: int, p
 
     log(f"💰 Valores formatados: {valor_formatado} / {taxa_formatada}")
 
-    embed = discord.Embed(
-        title="Aposta - Aguardando Mediador",
-        description=admin_mention,
-        color=EMBED_COLOR
-    )
-    embed.add_field(name="Modo", value=mode.replace("-", " ").title(), inline=True)
-    embed.add_field(name="Valor da Aposta", value=valor_formatado, inline=True)
-    embed.add_field(name="Taxa do Mediador", value=taxa_formatada, inline=True)
-    embed.add_field(name="Jogadores", value=f"{player1.mention} vs {player2.mention}", inline=False)
-    if guild.icon:
-        embed.set_thumbnail(url=guild.icon.url)
-    embed.set_footer(text=CREATOR_FOOTER)
+    # ========== CENTRAL DE MEDIADORES - ATRIBUIÇÃO AUTOMÁTICA ==========
+    # Verifica se o Central de Mediadores está configurado
+    central_configured = db.is_mediator_central_configured(guild.id)
+    auto_mediator = None
+    auto_mediator_pix = None
+    
+    if central_configured:
+        log(f"🏢 Central de Mediadores está configurado para guild {guild.id}")
+        
+        # Tenta pegar um mediador aleatório do central
+        mediator_data = db.get_random_mediator_from_central(guild.id)
+        
+        if mediator_data:
+            auto_mediator_id, auto_mediator_pix = mediator_data
+            log(f"✅ Mediador automático selecionado: {auto_mediator_id}")
+            
+            # Remove o mediador do central (já foi atribuído)
+            db.remove_mediator_from_central(guild.id, auto_mediator_id)
+            
+            # Atualiza a aposta com o mediador automático
+            bet.mediator_id = auto_mediator_id
+            bet.mediator_pix = auto_mediator_pix
+            db.update_active_bet(bet)
+            
+            # Busca o membro do mediador
+            auto_mediator = guild.get_member(auto_mediator_id)
+            if not auto_mediator:
+                try:
+                    auto_mediator = await guild.fetch_member(auto_mediator_id)
+                except:
+                    log(f"⚠️ Não foi possível encontrar o mediador {auto_mediator_id}")
+                    auto_mediator = None
+                    # Limpa o mediador da aposta se não encontrou
+                    bet.mediator_id = 0
+                    bet.mediator_pix = ""
+                    db.update_active_bet(bet)
+            
+            # Atualiza o painel do central
+            await update_mediator_central_panel(guild)
+        else:
+            log(f"⚠️ Central configurado mas sem mediadores disponíveis")
+    
+    # Se tem mediador automático atribuído
+    if auto_mediator:
+        # Adiciona o mediador ao tópico
+        try:
+            await thread.add_user(auto_mediator)
+            await thread.set_permissions(
+                auto_mediator,
+                overwrite=discord.PermissionOverwrite(
+                    send_messages=True,
+                    attach_files=True,
+                    embed_links=True,
+                    read_message_history=True
+                )
+            )
+            log(f"✅ Mediador {auto_mediator.name} adicionado ao tópico")
+        except Exception as e:
+            log(f"⚠️ Erro ao adicionar mediador ao tópico: {e}")
+        
+        # Cria embed de mediador já aceito
+        embed = discord.Embed(
+            title="Aposta Criada - Mediador Atribuído Automaticamente",
+            color=EMBED_COLOR
+        )
+        embed.add_field(name="Modo", value=mode.replace("-", " ").title(), inline=True)
+        embed.add_field(name="Valor da Aposta", value=valor_formatado, inline=True)
+        embed.add_field(name="Taxa do Mediador", value=taxa_formatada, inline=True)
+        embed.add_field(name="Jogadores", value=f"{player1.mention} vs {player2.mention}", inline=False)
+        embed.add_field(name="Mediador", value=auto_mediator.mention, inline=True)
+        
+        # Mostra PIX apenas se for aposta em reais
+        if currency_type != "sonhos":
+            embed.add_field(name="PIX", value=f"`{auto_mediator_pix}`", inline=True)
+            embed.add_field(
+                name="Instrução",
+                value="Envie o pagamento e clique no botão abaixo para confirmar",
+                inline=False
+            )
+        else:
+            embed.add_field(
+                name="Instrução",
+                value=f"Transfiram **{valor_formatado}** Sonhos para {auto_mediator.mention} usando a Loritta",
+                inline=False
+            )
+        
+        if guild.icon:
+            embed.set_thumbnail(url=guild.icon.url)
+        embed.set_footer(text=CREATOR_FOOTER)
+        
+        confirm_view = ConfirmPaymentButton(bet_id)
+        await thread.send(
+            content=f"{player1.mention} {player2.mention} Aposta criada! Mediador atribuído automaticamente: {auto_mediator.mention}",
+            embed=embed,
+            view=confirm_view
+        )
+        
+        # Notifica o mediador via DM
+        try:
+            await auto_mediator.send(
+                f"Você foi atribuído automaticamente como mediador de uma aposta no servidor **{guild.name}**!\n\n"
+                f"**Jogadores:** {player1.name} vs {player2.name}\n"
+                f"**Valor:** {valor_formatado}\n"
+                f"**Taxa:** {taxa_formatada}\n\n"
+                f"Acesse o tópico da aposta para mediar."
+            )
+        except:
+            pass
+    else:
+        # Comportamento normal - aguardar mediador
+        embed = discord.Embed(
+            title="Aposta - Aguardando Mediador",
+            description=admin_mention,
+            color=EMBED_COLOR
+        )
+        embed.add_field(name="Modo", value=mode.replace("-", " ").title(), inline=True)
+        embed.add_field(name="Valor da Aposta", value=valor_formatado, inline=True)
+        embed.add_field(name="Taxa do Mediador", value=taxa_formatada, inline=True)
+        embed.add_field(name="Jogadores", value=f"{player1.mention} vs {player2.mention}", inline=False)
+        
+        # Se o central está configurado mas não tem mediador, avisa
+        if central_configured:
+            embed.add_field(
+                name="Aviso",
+                value="Não há mediadores disponíveis no Central de Mediadores no momento.\n"
+                      "Aguarde um mediador aceitar manualmente.",
+                inline=False
+            )
+        
+        if guild.icon:
+            embed.set_thumbnail(url=guild.icon.url)
+        embed.set_footer(text=CREATOR_FOOTER)
 
-    view = AcceptMediationButton(bet_id)
+        view = AcceptMediationButton(bet_id)
 
-    await thread.send(content=f"{player1.mention} {player2.mention} Aposta criada! Aguardando mediador... {admin_mention}", embed=embed, view=view)
+        await thread.send(content=f"{player1.mention} {player2.mention} Aposta criada! Aguardando mediador... {admin_mention}", embed=embed, view=view)
 
 
 @bot.tree.command(name="confirmar-pagamento", description="Confirmar que você enviou o pagamento ao mediador")
@@ -2509,6 +2876,71 @@ async def setup(interaction: discord.Interaction, cargo: discord.Role, canal_de_
     await interaction.response.send_message(embed=embed)
 
 
+@bot.tree.command(name="central-apostado", description="[ADMIN] Criar painel do Central de Mediadores")
+async def central_apostado(interaction: discord.Interaction):
+    """Cria o painel do Central de Mediadores onde mediadores podem aguardar apostas"""
+    
+    # Apenas administradores podem usar este comando
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message(
+            "Apenas administradores podem usar este comando.",
+            ephemeral=True
+        )
+        return
+    
+    # Verifica se já existe um central configurado
+    existing_config = db.get_mediator_central_config(interaction.guild.id)
+    if existing_config:
+        # Remove configuração antiga
+        db.delete_mediator_central_config(interaction.guild.id)
+        log(f"♻️ Central anterior removido, criando novo")
+    
+    # Cria o embed do painel
+    embed = discord.Embed(
+        title="Central de Mediadores",
+        description="Mediadores podem aguardar aqui para serem atribuídos automaticamente às apostas.",
+        color=EMBED_COLOR
+    )
+    embed.add_field(
+        name="Mediadores na Fila (0/10)",
+        value="*Nenhum mediador aguardando*",
+        inline=False
+    )
+    embed.add_field(
+        name="Vagas Disponíveis",
+        value="10 vagas",
+        inline=True
+    )
+    embed.add_field(
+        name="Timeout",
+        value="2 horas",
+        inline=True
+    )
+    embed.add_field(
+        name="Como Funciona",
+        value="1. Clique em **Aguardar Aposta**\n"
+              "2. Informe seu PIX (apenas na primeira vez)\n"
+              "3. Aguarde ser atribuído automaticamente\n"
+              "4. Após 2h sem apostas, você será removido",
+        inline=False
+    )
+    if interaction.guild.icon:
+        embed.set_thumbnail(url=interaction.guild.icon.url)
+    embed.set_footer(text=CREATOR_FOOTER)
+    
+    # Envia o painel com os botões
+    view = MediatorCentralView(interaction.guild.id)
+    await interaction.response.send_message(embed=embed, view=view)
+    
+    # Busca a mensagem enviada para salvar o ID
+    message = await interaction.original_response()
+    
+    # Salva a configuração
+    db.save_mediator_central_config(interaction.guild.id, interaction.channel.id, message.id)
+    
+    log(f"✅ Central de Mediadores criado no guild {interaction.guild.id}")
+
+
 @bot.tree.command(name="ajuda", description="Ver todos os comandos disponíveis")
 async def ajuda(interaction: discord.Interaction):
     embed = discord.Embed(
@@ -2541,7 +2973,8 @@ async def ajuda(interaction: discord.Interaction):
     embed.add_field(
         name="Comandos para Administradores",
         value=(
-            "`/setup` - Configurar cargo de mediador do servidor"
+            "`/setup` - Configurar cargo de mediador do servidor\n"
+            "`/central-apostado` - Criar painel do Central de Mediadores"
         ),
         inline=False
     )

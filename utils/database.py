@@ -675,6 +675,146 @@ class HybridDatabase:
             self._save_data(data)
             logger.info(f"🗑️ Assinatura removida para guild {guild_id}")
 
+    # ==================== CENTRAL DE MEDIADORES ====================
+
+    def save_mediator_central_config(self, guild_id: int, channel_id: int, message_id: int):
+        """Salva configuração do central de mediadores para um servidor"""
+        data = self._load_data()
+        if 'mediator_central' not in data:
+            data['mediator_central'] = {}
+        
+        data['mediator_central'][str(guild_id)] = {
+            'channel_id': channel_id,
+            'message_id': message_id,
+            'mediators': {},  # {user_id: {'joined_at': timestamp, 'pix': pix_key}}
+            'created_at': datetime.now().isoformat()
+        }
+        self._save_data(data)
+        logger.info(f"💾 Central de mediadores configurado para guild {guild_id}")
+
+    def get_mediator_central_config(self, guild_id: int) -> Optional[dict]:
+        """Retorna configuração do central de mediadores"""
+        data = self._load_data()
+        return data.get('mediator_central', {}).get(str(guild_id))
+
+    def add_mediator_to_central(self, guild_id: int, user_id: int, pix_key: str) -> bool:
+        """Adiciona mediador ao central de espera. Retorna False se central está cheio (10 vagas)"""
+        data = self._load_data()
+        if 'mediator_central' not in data:
+            data['mediator_central'] = {}
+        
+        guild_str = str(guild_id)
+        if guild_str not in data['mediator_central']:
+            return False
+        
+        mediators = data['mediator_central'][guild_str].get('mediators', {})
+        
+        # Verifica limite de 10 vagas
+        if len(mediators) >= 10 and str(user_id) not in mediators:
+            return False
+        
+        mediators[str(user_id)] = {
+            'joined_at': datetime.now().isoformat(),
+            'pix': pix_key
+        }
+        data['mediator_central'][guild_str]['mediators'] = mediators
+        self._save_data(data)
+        logger.info(f"✅ Mediador {user_id} adicionado ao central do guild {guild_id}")
+        return True
+
+    def remove_mediator_from_central(self, guild_id: int, user_id: int):
+        """Remove mediador do central de espera"""
+        data = self._load_data()
+        guild_str = str(guild_id)
+        
+        if 'mediator_central' not in data:
+            return
+        if guild_str not in data['mediator_central']:
+            return
+        
+        mediators = data['mediator_central'][guild_str].get('mediators', {})
+        user_str = str(user_id)
+        
+        if user_str in mediators:
+            del mediators[user_str]
+            data['mediator_central'][guild_str]['mediators'] = mediators
+            self._save_data(data)
+            logger.info(f"🗑️ Mediador {user_id} removido do central do guild {guild_id}")
+
+    def get_mediators_in_central(self, guild_id: int) -> dict:
+        """Retorna todos os mediadores no central de espera"""
+        data = self._load_data()
+        guild_str = str(guild_id)
+        
+        if 'mediator_central' not in data:
+            return {}
+        if guild_str not in data['mediator_central']:
+            return {}
+        
+        return data['mediator_central'][guild_str].get('mediators', {})
+
+    def get_random_mediator_from_central(self, guild_id: int) -> Optional[tuple]:
+        """Retorna um mediador aleatório do central (user_id, pix_key) ou None se vazio"""
+        import random
+        mediators = self.get_mediators_in_central(guild_id)
+        
+        if not mediators:
+            return None
+        
+        user_id_str = random.choice(list(mediators.keys()))
+        pix_key = mediators[user_id_str]['pix']
+        return (int(user_id_str), pix_key)
+
+    def get_expired_mediators_in_central(self, guild_id: int, timeout_hours: int = 2) -> List[int]:
+        """Retorna lista de mediadores que estão há mais de X horas no central"""
+        mediators = self.get_mediators_in_central(guild_id)
+        expired = []
+        current_time = datetime.now()
+        
+        for user_id_str, data in mediators.items():
+            joined_at = datetime.fromisoformat(data['joined_at'])
+            hours_waiting = (current_time - joined_at).total_seconds() / 3600
+            
+            if hours_waiting >= timeout_hours:
+                expired.append(int(user_id_str))
+        
+        return expired
+
+    def is_mediator_in_central(self, guild_id: int, user_id: int) -> bool:
+        """Verifica se um mediador está no central"""
+        mediators = self.get_mediators_in_central(guild_id)
+        return str(user_id) in mediators
+
+    def save_mediator_pix(self, user_id: int, pix_key: str):
+        """Salva a chave PIX de um mediador (global, para próximas vezes)"""
+        data = self._load_data()
+        if 'mediator_pix_keys' not in data:
+            data['mediator_pix_keys'] = {}
+        
+        data['mediator_pix_keys'][str(user_id)] = pix_key
+        self._save_data(data)
+        logger.info(f"💾 PIX salvo para mediador {user_id}")
+
+    def get_mediator_pix(self, user_id: int) -> Optional[str]:
+        """Retorna a chave PIX salva de um mediador"""
+        data = self._load_data()
+        return data.get('mediator_pix_keys', {}).get(str(user_id))
+
+    def is_mediator_central_configured(self, guild_id: int) -> bool:
+        """Verifica se o central de mediadores está configurado para o servidor"""
+        config = self.get_mediator_central_config(guild_id)
+        return config is not None
+
+    def delete_mediator_central_config(self, guild_id: int):
+        """Remove a configuração do central de mediadores"""
+        data = self._load_data()
+        guild_str = str(guild_id)
+        
+        if 'mediator_central' in data and guild_str in data['mediator_central']:
+            del data['mediator_central'][guild_str]
+            self._save_data(data)
+            logger.info(f"🗑️ Central de mediadores removido do guild {guild_id}")
+
 
 # Alias para compatibilidade com código existente
 Database = HybridDatabase
