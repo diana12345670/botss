@@ -753,17 +753,48 @@ class HybridDatabase:
         
         return data['mediator_central'][guild_str].get('mediators', {})
 
-    def get_random_mediator_from_central(self, guild_id: int) -> Optional[tuple]:
-        """Retorna um mediador aleatório do central (user_id, pix_key) ou None se vazio"""
-        import random
+    def get_first_mediator_from_central(self, guild_id: int) -> Optional[tuple]:
+        """Retorna o primeiro mediador da fila (mais antigo) do central (user_id, pix_key) ou None se vazio"""
         mediators = self.get_mediators_in_central(guild_id)
         
         if not mediators:
             return None
         
-        user_id_str = random.choice(list(mediators.keys()))
-        pix_key = mediators[user_id_str]['pix']
+        # Ordena por joined_at para pegar o primeiro (mais antigo)
+        sorted_mediators = sorted(
+            mediators.items(),
+            key=lambda x: x[1]['joined_at']
+        )
+        
+        user_id_str, data = sorted_mediators[0]
+        pix_key = data['pix']
         return (int(user_id_str), pix_key)
+
+    def add_mediator_to_end_of_central(self, guild_id: int, user_id: int, pix_key: str) -> bool:
+        """Adiciona mediador ao FINAL da fila do central (novo timestamp). Retorna False se central está cheio"""
+        data = self._load_data()
+        if 'mediator_central' not in data:
+            data['mediator_central'] = {}
+        
+        guild_str = str(guild_id)
+        if guild_str not in data['mediator_central']:
+            return False
+        
+        mediators = data['mediator_central'][guild_str].get('mediators', {})
+        
+        # Verifica limite de 10 vagas
+        if len(mediators) >= 10 and str(user_id) not in mediators:
+            return False
+        
+        # Adiciona com timestamp atual (fica no final da fila)
+        mediators[str(user_id)] = {
+            'joined_at': datetime.now().isoformat(),
+            'pix': pix_key
+        }
+        data['mediator_central'][guild_str]['mediators'] = mediators
+        self._save_data(data)
+        logger.info(f"✅ Mediador {user_id} adicionado ao FINAL da fila do central do guild {guild_id}")
+        return True
 
     def get_expired_mediators_in_central(self, guild_id: int, timeout_hours: int = 2) -> List[int]:
         """Retorna lista de mediadores que estão há mais de X horas no central"""

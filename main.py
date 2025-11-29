@@ -1293,41 +1293,41 @@ async def update_mediator_central_panel(guild: discord.Guild):
         vagas_ocupadas = len(mediators)
         vagas_disponiveis = 10 - vagas_ocupadas
         
-        # Monta lista de mediadores
+        # Monta lista de mediadores com emojis
         if mediators:
             mediators_list = []
             for i, (user_id_str, data) in enumerate(mediators.items(), 1):
-                mediators_list.append(f"{i}. <@{user_id_str}>")
+                mediators_list.append(f"👨‍⚖️ {i}. <@{user_id_str}>")
             mediators_text = "\n".join(mediators_list)
         else:
-            mediators_text = "*Nenhum mediador aguardando*"
+            mediators_text = "*🔍 Nenhum mediador aguardando*"
         
         embed = discord.Embed(
-            title="Central de Mediadores",
+            title="🏢 Central de Mediadores",
             description="Mediadores podem aguardar aqui para serem atribuídos automaticamente às apostas.",
             color=EMBED_COLOR
         )
         embed.add_field(
-            name=f"Mediadores na Fila ({vagas_ocupadas}/10)",
+            name=f"📋 Mediadores na Fila ({vagas_ocupadas}/10)",
             value=mediators_text,
             inline=False
         )
         embed.add_field(
-            name="Vagas Disponíveis",
+            name="✅ Vagas Disponíveis",
             value=f"{vagas_disponiveis} vagas",
             inline=True
         )
         embed.add_field(
-            name="Timeout",
+            name="⏰ Timeout",
             value="2 horas",
             inline=True
         )
         embed.add_field(
-            name="Como Funciona",
-            value="1. Clique em **Aguardar Aposta**\n"
-                  "2. Informe seu PIX (apenas na primeira vez)\n"
-                  "3. Aguarde ser atribuído automaticamente\n"
-                  "4. Após 2h sem apostas, você será removido",
+            name="📖 Como Funciona",
+            value="1️⃣ Clique em **Aguardar Aposta**\n"
+                  "2️⃣ Informe seu PIX (apenas na primeira vez)\n"
+                  "3️⃣ Aguarde ser atribuído automaticamente\n"
+                  "4️⃣ Após 2h sem apostas, você será removido",
             inline=False
         )
         if guild.icon:
@@ -2260,8 +2260,8 @@ async def create_bet_channel(guild: discord.Guild, mode: str, player1_id: int, p
     if central_configured:
         log(f"🏢 Central de Mediadores está configurado para guild {guild.id}")
         
-        # Tenta pegar um mediador aleatório do central
-        mediator_data = db.get_random_mediator_from_central(guild.id)
+        # Tenta pegar o primeiro mediador da fila (sistema FIFO)
+        mediator_data = db.get_first_mediator_from_central(guild.id)
         
         if mediator_data:
             auto_mediator_id, auto_mediator_pix = mediator_data
@@ -2538,6 +2538,18 @@ async def finalizar_aposta(interaction: discord.Interaction, vencedor: discord.M
 
     await interaction.response.send_message(embed=embed)
 
+    # ========== DEVOLVE MEDIADOR AO FINAL DA FILA ==========
+    # Se tinha mediador automático do central, devolve ao final da fila
+    if bet.mediator_id and bet.mediator_pix:
+        central_configured = db.is_mediator_central_configured(interaction.guild.id)
+        if central_configured:
+            success = db.add_mediator_to_end_of_central(interaction.guild.id, bet.mediator_id, bet.mediator_pix)
+            if success:
+                log(f"🔄 Mediador {bet.mediator_id} devolvido ao final da fila do central")
+                await update_mediator_central_panel(interaction.guild)
+            else:
+                log(f"⚠️ Não foi possível devolver mediador {bet.mediator_id} à fila (cheia ou central não configurado)")
+
     db.finish_bet(bet)
 
     # Envia resultado no canal configurado (se houver)
@@ -2625,6 +2637,18 @@ async def cancelar_aposta(interaction: discord.Interaction):
     embed.set_footer(text=CREATOR_FOOTER)
 
     await interaction.response.send_message(embed=embed)
+
+    # ========== DEVOLVE MEDIADOR AO FINAL DA FILA ==========
+    # Se tinha mediador automático do central, devolve ao final da fila
+    if bet.mediator_id and bet.mediator_pix:
+        central_configured = db.is_mediator_central_configured(interaction.guild.id)
+        if central_configured:
+            success = db.add_mediator_to_end_of_central(interaction.guild.id, bet.mediator_id, bet.mediator_pix)
+            if success:
+                log(f"🔄 Mediador {bet.mediator_id} devolvido ao final da fila do central")
+                await update_mediator_central_panel(interaction.guild)
+            else:
+                log(f"⚠️ Não foi possível devolver mediador {bet.mediator_id} à fila (cheia ou central não configurado)")
 
     bet.finished_at = datetime.now().isoformat()
     db.finish_bet(bet)
@@ -2895,33 +2919,33 @@ async def central_apostado(interaction: discord.Interaction):
         db.delete_mediator_central_config(interaction.guild.id)
         log(f"♻️ Central anterior removido, criando novo")
     
-    # Cria o embed do painel
+    # Cria o embed do painel com emojis
     embed = discord.Embed(
-        title="Central de Mediadores",
+        title="🏢 Central de Mediadores",
         description="Mediadores podem aguardar aqui para serem atribuídos automaticamente às apostas.",
         color=EMBED_COLOR
     )
     embed.add_field(
-        name="Mediadores na Fila (0/10)",
-        value="*Nenhum mediador aguardando*",
+        name="📋 Mediadores na Fila (0/10)",
+        value="*🔍 Nenhum mediador aguardando*",
         inline=False
     )
     embed.add_field(
-        name="Vagas Disponíveis",
+        name="✅ Vagas Disponíveis",
         value="10 vagas",
         inline=True
     )
     embed.add_field(
-        name="Timeout",
+        name="⏰ Timeout",
         value="2 horas",
         inline=True
     )
     embed.add_field(
-        name="Como Funciona",
-        value="1. Clique em **Aguardar Aposta**\n"
-              "2. Informe seu PIX (apenas na primeira vez)\n"
-              "3. Aguarde ser atribuído automaticamente\n"
-              "4. Após 2h sem apostas, você será removido",
+        name="📖 Como Funciona",
+        value="1️⃣ Clique em **Aguardar Aposta**\n"
+              "2️⃣ Informe seu PIX (apenas na primeira vez)\n"
+              "3️⃣ Aguarde ser atribuído automaticamente\n"
+              "4️⃣ Após 2h sem apostas, você será removido",
         inline=False
     )
     if interaction.guild.icon:
