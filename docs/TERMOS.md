@@ -222,7 +222,7 @@ Em nenhum caso seremos responsáveis por:
 - Perda de dados
 - Danos morais
 
-Responsabilidade máxima limitada a R$ 100,00.
+Responsabilidade máxima limitada a $ 100,00.
 
 ## 15. Rescisão
 

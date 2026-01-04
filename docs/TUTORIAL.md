@@ -36,12 +36,12 @@ Isso criará:
 
 **Opção 1: Painel Individual**
 ```
-/mostrar-fila modo:1v1 Misto valor:50 moeda:R$
+/mostrar-fila modo:1v1 Misto valor:50 moeda:$
 ```
 
 **Opção 2: Todos os Painéis de Uma Vez**
 ```
-/preset-filas valor:50 moeda:R$
+/preset-filas valor:50 moeda:$
 ```
 
 Isso criará 4 painéis (1v1 Misto, 1v1 Mob, 2v2 Misto, 2v2 Mob).
@@ -74,7 +74,7 @@ Quando outro(s) jogador(es) entrar(em), você receberá uma notificação:
 
 🎮 Aposta criada!
 Modo: 1v1 Misto
-Valor: R$ 50,00
+Valor: $ 50,00
 
 Aguardando mediador aceitar...
 ```
@@ -132,7 +132,7 @@ Quando uma aposta for criada, você verá:
 
 🎮 Nova aposta criada!
 Modo: 1v1 Misto
-Valor: R$ 50,00
+Valor: $ 50,00
 
 [👨‍⚖️ Aceitar Mediação]
 ```
@@ -155,7 +155,7 @@ Digite sua chave PIX e envie.
 Os jogadores verão:
 
 ```
-💰 Envie R$ 50,00 para:
+💰 Envie $ 50,00 para:
 PIX: sua.chave@exemplo.com
 
 Após enviar, use /confirmar-pagamento

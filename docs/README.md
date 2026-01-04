@@ -18,7 +18,7 @@ O **StormBet Apostas** é um bot Discord completo que automatiza todo o processo
 - ✅ Filas automáticas para diferentes modos de jogo
 - ✅ Criação automática de canais privados para cada aposta
 - ✅ Sistema de mediação com confirmação de pagamento
-- ✅ Suporte a múltiplas moedas (R$, USD, EUR, etc.)
+- ✅ Suporte a múltiplas moedas ($, USD, EUR, etc.)
 - ✅ Histórico completo de todas as apostas
 - ✅ Totalmente automatizado e seguro
 

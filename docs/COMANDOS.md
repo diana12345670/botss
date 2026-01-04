@@ -23,11 +23,11 @@ Cria um painel interativo de filas com botões para entrada rápida.
 **Parâmetros:**
 - `modo` - Tipo de jogo (1v1 Misto, 1v1 Mob, 2v2 Misto, 2v2 Mob)
 - `valor` - Valor da aposta (número)
-- `moeda` - Moeda (R$, USD, EUR, GBP, ARS, CLP)
+- `moeda` - Moeda ($, USD, EUR, GBP, ARS, CLP)
 
 **Exemplo:**
 ```
-/mostrar-fila modo:1v1 Misto valor:50 moeda:R$
+/mostrar-fila modo:1v1 Misto valor:50 moeda:$
 ```
 
 ### `/preset-filas`
@@ -41,7 +41,7 @@ Cria painéis para todos os modos de uma vez (1v1 Misto, 1v1 Mob, 2v2 Misto, 2v2
 
 **Exemplo:**
 ```
-/preset-filas valor:100 moeda:R$
+/preset-filas valor:100 moeda:$
 ```
 
 ### `/confirmar-pagamento`

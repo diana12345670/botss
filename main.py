@@ -10,7 +10,7 @@ from models.bet import Bet
 from utils.database import Database
 from aiohttp import web
 
-# Forçar logs para stdout sem buffer (ESSENCIAL para Fly.io)
+# Forçar logs para stdout sem buffer (ESSENCIAL para Railway)
 import logging
 
 # Configurar logging para capturar TUDO (incluindo discord.py)
@@ -31,7 +31,7 @@ sys.stderr.reconfigure(line_buffering=True)
 logger = logging.getLogger('bot')
 logger.setLevel(logging.INFO)
 
-# Função para logging com flush automático (necessário para Fly.io)
+# Função para logging com flush automático (necessário para Railway)
 def log(message):
     logger.info(message)
     sys.stdout.flush()
@@ -49,7 +49,7 @@ IS_RAILWAY = os.getenv("RAILWAY_ENVIRONMENT") is not None or os.getenv("RAILWAY_
 IS_RENDER = os.getenv("RENDER") is not None or os.getenv("RENDER_SERVICE_NAME") is not None
 
 if IS_FLYIO:
-    log("✈️ Detectado ambiente Fly.io")
+    log("✈️ Detectado ambiente Railway")
 elif IS_RAILWAY:
     log("🚂 Detectado ambiente Railway")
 elif IS_RENDER:
@@ -379,8 +379,8 @@ class QueueButton(discord.ui.View):
                 valor_formatado = format_sonhos(bet_value)
                 moeda_nome = "Sonhos"
             else:
-                valor_formatado = f"R$ {bet_value:.2f}"
-                moeda_nome = "Reais"
+                valor_formatado = f"$ {bet_value:.2f}"
+                moeda_nome = "Dinheiro"
 
             embed_update = discord.Embed(
                 title=mode.replace('-', ' ').title(),
@@ -553,8 +553,8 @@ class QueueButton(discord.ui.View):
                         valor_formatado = format_sonhos(bet_value)
                         moeda_nome = "Sonhos"
                     else:
-                        valor_formatado = f"R$ {bet_value:.2f}"
-                        moeda_nome = "Reais"
+                        valor_formatado = f"$ {bet_value:.2f}"
+                        moeda_nome = "Dinheiro"
 
                     embed_update = discord.Embed(
                         title=mode.replace('-', ' ').title(),
@@ -641,8 +641,8 @@ class QueueButton(discord.ui.View):
                         valor_formatado = format_sonhos(bet_value)
                         moeda_nome = "Sonhos"
                     else:
-                        valor_formatado = f"R$ {bet_value:.2f}"
-                        moeda_nome = "Reais"
+                        valor_formatado = f"$ {bet_value:.2f}"
+                        moeda_nome = "Dinheiro"
 
                     embed_update = discord.Embed(
                         title=mode.replace('-', ' ').title(),
@@ -734,8 +734,8 @@ class QueueButton(discord.ui.View):
                 valor_formatado = format_sonhos(bet_value)
                 moeda_nome = "Sonhos"
             else:
-                valor_formatado = f"R$ {bet_value:.2f}"
-                moeda_nome = "Reais"
+                valor_formatado = f"$ {bet_value:.2f}"
+                moeda_nome = "Dinheiro"
 
             embed_update = discord.Embed(
                 title=mode.replace('-', ' ').title(),
@@ -1483,7 +1483,7 @@ async def cleanup_expired_queues():
                                 if currency_type == "sonhos":
                                     valor_formatado = format_sonhos(bet_value)
                                 else:
-                                    valor_formatado = f"R$ {bet_value:.2f}"
+                                    valor_formatado = f"$ {bet_value:.2f}"
 
                                 embed.add_field(name="Valor", value=valor_formatado, inline=True)
                                 embed.add_field(name="Time 1", value=team1_text, inline=True)
@@ -1506,7 +1506,7 @@ async def cleanup_expired_queues():
                                 if currency_type == "sonhos":
                                     valor_formatado = format_sonhos(bet_value)
                                 else:
-                                    valor_formatado = f"R$ {bet_value:.2f}"
+                                    valor_formatado = f"$ {bet_value:.2f}"
 
                                 embed.add_field(name="Valor", value=valor_formatado, inline=True)
                                 embed.add_field(name="Fila", value=players_text, inline=True)
@@ -1823,7 +1823,7 @@ def register_all_commands(target_bot):
     modo="Escolha o modo de jogo",
     valor="Valor da aposta (exemplo: 50k, 1.5m, 2000)",
     taxa="Taxa do mediador (exemplo: 5%, 500, 1k)",
-    moeda="Tipo de moeda da aposta (Reais ou Sonhos)"
+    moeda="Tipo de moeda da aposta (Dinheiro ou Sonhos)"
 )
 @app_commands.choices(modo=[
     app_commands.Choice(name="1v1 Misto", value="1v1-misto"),
@@ -1832,7 +1832,7 @@ def register_all_commands(target_bot):
     app_commands.Choice(name="2v2 Mob", value="2v2-mob"),
 ])
 @app_commands.choices(moeda=[
-    app_commands.Choice(name="Reais", value="reais"),
+    app_commands.Choice(name="Dinheiro", value="reais"),
     app_commands.Choice(name="Sonhos", value="sonhos"),
 ])
 async def mostrar_fila(interaction: discord.Interaction, modo: app_commands.Choice[str], valor: str, taxa: str, moeda: app_commands.Choice[str]):
@@ -1897,7 +1897,7 @@ async def mostrar_fila(interaction: discord.Interaction, modo: app_commands.Choi
     if currency_type == "sonhos":
         valor_formatado = format_sonhos(valor_numerico)
     else:
-        valor_formatado = f"R$ {valor_numerico:.2f}"
+        valor_formatado = f"$ {valor_numerico:.2f}"
 
     embed = discord.Embed(
         title=modo.name,
@@ -1940,7 +1940,7 @@ async def mostrar_fila(interaction: discord.Interaction, modo: app_commands.Choi
 @app_commands.describe(
     modo="Escolha o modo de jogo",
     taxa="Taxa do mediador (exemplo: 5%, 500, 1k)",
-    moeda="Tipo de moeda da aposta (Reais ou Sonhos)"
+    moeda="Tipo de moeda da aposta (Dinheiro ou Sonhos)"
 )
 @app_commands.choices(modo=[
     app_commands.Choice(name="1v1 Misto", value="1v1-misto"),
@@ -1949,7 +1949,7 @@ async def mostrar_fila(interaction: discord.Interaction, modo: app_commands.Choi
     app_commands.Choice(name="2v2 Mob", value="2v2-mob"),
 ])
 @app_commands.choices(moeda=[
-    app_commands.Choice(name="Reais", value="reais"),
+    app_commands.Choice(name="Dinheiro", value="reais"),
     app_commands.Choice(name="Sonhos", value="sonhos"),
 ])
 async def preset_filas(interaction: discord.Interaction, modo: app_commands.Choice[str], taxa: str, moeda: app_commands.Choice[str]):
@@ -2022,7 +2022,7 @@ async def preset_filas(interaction: discord.Interaction, modo: app_commands.Choi
             if currency_type == "sonhos":
                 valor_formatado = format_sonhos(valor_numerico)
             else:
-                valor_formatado = f"R$ {valor_numerico:.2f}"
+                valor_formatado = f"$ {valor_numerico:.2f}"
 
             embed = discord.Embed(
                 title=modo.name,
@@ -3546,7 +3546,7 @@ async def before_check_subscriptions():
     await bot.wait_until_ready()
 
 
-# ===== SERVIDOR HTTP PARA HEALTHCHECK (Fly.io/Railway) =====
+# ===== SERVIDOR HTTP PARA HEALTHCHECK (Railway/Railway) =====
 # Middleware para filtrar logs de health checks
 @web.middleware
 async def filter_health_check_logs(request, handler):
@@ -3593,7 +3593,7 @@ async def dashboard(request):
         )
 
 async def health_check(request):
-    """Endpoint de healthcheck para Fly.io/Railway"""
+    """Endpoint de healthcheck para Railway/Railway"""
     bot_status = "online" if bot.is_ready() else "starting"
     return web.Response(
         text=f"Bot Status: {bot_status}\nUptime: OK",

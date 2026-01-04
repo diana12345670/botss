@@ -38,7 +38,7 @@ O sistema é seguro, mas lembre-se:
 
 ### Quais moedas são aceitas?
 
-- R$ (Real Brasileiro)
+- $ (Real Brasileiro)
 - USD (Dólar Americano)
 - EUR (Euro)
 - GBP (Libra Esterlina)
