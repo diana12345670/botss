@@ -10,10 +10,10 @@ class Bet:
     mode: str
     player1_id: int
     player2_id: int
-    team1_ids: List[int] = None
-    team2_ids: List[int] = None
     mediator_id: int
     channel_id: int
+    team1_ids: List[int] = None
+    team2_ids: List[int] = None
     bet_value: float = 0.0
     mediator_fee: float = 0.0
     mediator_pix: Optional[str] = None
