@@ -1042,7 +1042,7 @@ class Unified1v1PanelView(discord.ui.View):
 
         meta = db.get_panel_metadata(interaction.message.id) or {}
         currency_type = meta.get('currency_type', 'sonhos')
-        await self._update_panel(interaction, bet_value, currency_type)
+        await self._update_panel(interaction, bet_value, currency_type, message_id_override=panel_message_id)
 
         await create_bet_channel(
             interaction.guild,
@@ -1176,8 +1176,8 @@ class Unified2v2PanelView(discord.ui.View):
         misto_t1, misto_t2 = self._team_qids(misto_base)
         return [mob_t1, mob_t2, misto_t1, misto_t2]
 
-    async def _update_panel(self, interaction: discord.Interaction, bet_value: float, currency_type: str):
-        message_id = interaction.message.id
+    async def _update_panel(self, interaction: discord.Interaction, bet_value: float, currency_type: str, message_id_override: int | None = None):
+        message_id = message_id_override or interaction.message.id
 
         mob_base = self._base_qid("2v2-mob", message_id)
         misto_base = self._base_qid("2v2-misto", message_id)
@@ -1220,7 +1220,7 @@ class Unified2v2PanelView(discord.ui.View):
         embed_update.set_footer(text=CREATOR_FOOTER)
 
         try:
-            message = await interaction.channel.fetch_message(interaction.message.id)
+            message = await interaction.channel.fetch_message(message_id)
             await message.edit(embed=embed_update)
         except Exception as e:
             log(f"❌ Erro ao atualizar painel 2v2 unificado: {e}")
@@ -1262,11 +1262,11 @@ class Unified2v2PanelView(discord.ui.View):
 
             db.add_to_queue(team1_qid if team_number == 1 else team2_qid, user_id)
 
-        await self._update_panel(interaction, bet_value, currency_type)
+        await self._update_panel(interaction, bet_value, currency_type, message_id_override=message_id)
         await interaction.followup.send(f"Você entrou no Time {team_number}.", ephemeral=True)
-        await self._try_create_bet_if_full(interaction, mode, base_qid, bet_value, mediator_fee, currency_type)
+        await self._try_create_bet_if_full(interaction, mode, base_qid, bet_value, mediator_fee, currency_type, panel_message_id=message_id)
 
-    async def _try_create_bet_if_full(self, interaction: discord.Interaction, mode: str, base_qid: str, bet_value: float, mediator_fee: float, currency_type: str):
+    async def _try_create_bet_if_full(self, interaction: discord.Interaction, mode: str, base_qid: str, bet_value: float, mediator_fee: float, currency_type: str, panel_message_id: int):
         team1_qid, team2_qid = self._team_qids(base_qid)
         team1 = db.get_queue(team1_qid)
         team2 = db.get_queue(team2_qid)
@@ -1276,7 +1276,7 @@ class Unified2v2PanelView(discord.ui.View):
         db.set_queue(team1_qid, [])
         db.set_queue(team2_qid, [])
 
-        await self._update_panel(interaction, bet_value, currency_type)
+        await self._update_panel(interaction, bet_value, currency_type, message_id_override=panel_message_id)
 
         await create_bet_channel(
             interaction.guild,
