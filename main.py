@@ -1225,8 +1225,9 @@ class Unified2v2PanelView(discord.ui.View):
         except Exception as e:
             log(f"❌ Erro ao atualizar painel 2v2 unificado: {e}")
 
-    async def _join_team(self, interaction: discord.Interaction, mode: str, team_number: int):
-        meta = await self._load_panel(interaction)
+    async def _join_team(self, interaction: discord.Interaction, mode: str, team_number: int, message_id_override: int | None = None):
+        target_message_id = message_id_override or interaction.message.id
+        meta = db.get_panel_metadata(target_message_id)
         if not meta:
             await interaction.followup.send("⚠️ Dados do painel não encontrados. Recrie o painel.", ephemeral=True)
             return
@@ -1234,7 +1235,7 @@ class Unified2v2PanelView(discord.ui.View):
         bet_value = float(meta['bet_value'])
         mediator_fee = float(meta['mediator_fee'])
         currency_type = meta.get('currency_type', 'sonhos')
-        message_id = interaction.message.id
+        message_id = target_message_id
 
         base_qid = self._base_qid(mode, message_id)
         team1_qid, team2_qid = self._team_qids(base_qid)
@@ -1293,7 +1294,7 @@ class Unified2v2PanelView(discord.ui.View):
         await interaction.response.send_message(
             "Escolha o time para entrar em 2v2 MOB:",
             ephemeral=True,
-            view=self._team_selector_view("2v2-mob")
+            view=self._team_selector_view("2v2-mob", interaction.message.id)
         )
 
     @discord.ui.button(label='💻 2v2 MISTO', style=discord.ButtonStyle.blurple, row=0, custom_id='persistent:panel_2v2_misto')
@@ -1301,10 +1302,10 @@ class Unified2v2PanelView(discord.ui.View):
         await interaction.response.send_message(
             "Escolha o time para entrar em 2v2 MISTO:",
             ephemeral=True,
-            view=self._team_selector_view("2v2-misto")
+            view=self._team_selector_view("2v2-misto", interaction.message.id)
         )
 
-    def _team_selector_view(self, mode: str) -> discord.ui.View:
+    def _team_selector_view(self, mode: str, panel_message_id: int) -> discord.ui.View:
         parent = self
 
         class TeamSelector(discord.ui.View):
@@ -1314,13 +1315,13 @@ class Unified2v2PanelView(discord.ui.View):
             @discord.ui.button(label="Time 1", style=discord.ButtonStyle.blurple, row=0)
             async def choose_team1(self, interaction: discord.Interaction, button: discord.ui.Button):
                 await interaction.response.defer(ephemeral=True)
-                await parent._join_team(interaction, mode, 1)
+                await parent._join_team(interaction, mode, 1, message_id_override=panel_message_id)
                 self.stop()
 
             @discord.ui.button(label="Time 2", style=discord.ButtonStyle.blurple, row=0)
             async def choose_team2(self, interaction: discord.Interaction, button: discord.ui.Button):
                 await interaction.response.defer(ephemeral=True)
-                await parent._join_team(interaction, mode, 2)
+                await parent._join_team(interaction, mode, 2, message_id_override=panel_message_id)
                 self.stop()
 
         return TeamSelector()
