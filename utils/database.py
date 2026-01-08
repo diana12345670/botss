@@ -596,6 +596,13 @@ class HybridDatabase:
         data['queue_metadata'][str(message_id)] = metadata
         self._save_data(data)
 
+        # Verifica se salvou corretamente (debug de painel)
+        saved_data = self._load_data()
+        if str(message_id) in saved_data.get('queue_metadata', {}):
+            logger.info(f"✅ Metadados de painel salvos: message_id={message_id}, panel_type={panel_type}, total={len(saved_data['queue_metadata'])}")
+        else:
+            logger.error(f"❌ FALHA ao salvar metadados do painel para mensagem {message_id}!")
+
     def get_panel_metadata(self, message_id: int) -> Optional[dict]:
         """Retorna metadados do painel unificado pelo message_id (se existir)."""
         metadata = self.get_queue_metadata(message_id)
