@@ -339,6 +339,29 @@ class HybridDatabase:
         data = self._load_data()
         return data['queues'].get(queue_id, [])
 
+    def set_queue(self, queue_id: str, users: List[int]):
+        """Substitui a fila inteira (preserva ordem)"""
+        data = self._load_data()
+
+        if 'queues' not in data:
+            data['queues'] = {}
+        if 'queue_timestamps' not in data:
+            data['queue_timestamps'] = {}
+
+        data['queues'][queue_id] = list(users)
+        if queue_id not in data['queue_timestamps']:
+            data['queue_timestamps'][queue_id] = {}
+
+        # Mantém timestamps só para usuários atuais
+        now = datetime.now().isoformat()
+        new_ts = {}
+        for uid in data['queues'][queue_id]:
+            uid_str = str(uid)
+            new_ts[uid_str] = data['queue_timestamps'][queue_id].get(uid_str, now)
+        data['queue_timestamps'][queue_id] = new_ts
+
+        self._save_data(data)
+
     def remove_from_all_queues(self, user_id: int):
         """Remove um jogador de todas as filas"""
         data = self._load_data()
@@ -355,8 +378,16 @@ class HybridDatabase:
         """Verifica se um jogador está em uma aposta ativa"""
         data = self._load_data()
         for bet_data in data['active_bets'].values():
-            if bet_data['player1_id'] == user_id or bet_data['player2_id'] == user_id:
-                return True
+            try:
+                if bet_data.get('player1_id') == user_id or bet_data.get('player2_id') == user_id:
+                    return True
+                team1_ids = bet_data.get('team1_ids') or []
+                team2_ids = bet_data.get('team2_ids') or []
+                if user_id in team1_ids or user_id in team2_ids:
+                    return True
+            except Exception:
+                # Em caso de dados corrompidos, não travar o bot
+                continue
         return False
 
     def add_active_bet(self, bet: Bet):
