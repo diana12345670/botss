@@ -561,6 +561,50 @@ class HybridDatabase:
             return {}
         return data['queue_metadata']
 
+    def save_panel_metadata(self, message_id: int, panel_type: str, bet_value: float, mediator_fee: float, channel_id: int, currency_type: str = "sonhos"):
+        """Salva metadados de um painel unificado (1v1 ou 2v2)."""
+        if not isinstance(message_id, int) or message_id <= 0:
+            raise ValueError(f"message_id deve ser um inteiro positivo, recebido: {message_id}")
+        if panel_type not in ("1v1", "2v2"):
+            raise ValueError(f"panel_type inválido: {panel_type}")
+
+        try:
+            bet_value = float(bet_value)
+            mediator_fee = float(mediator_fee)
+        except (ValueError, TypeError) as e:
+            raise ValueError(f"bet_value e mediator_fee devem ser numéricos: {e}")
+
+        if bet_value <= 0:
+            raise ValueError(f"bet_value deve ser maior que zero, recebido: {bet_value}")
+        if mediator_fee < 0:
+            raise ValueError(f"mediator_fee deve ser >= 0, recebido: {mediator_fee}")
+
+        data = self._load_data()
+        if 'queue_metadata' not in data:
+            data['queue_metadata'] = {}
+
+        metadata = {
+            'type': 'panel',
+            'panel_type': panel_type,
+            'bet_value': bet_value,
+            'mediator_fee': mediator_fee,
+            'channel_id': int(channel_id),
+            'message_id': int(message_id),
+            'currency_type': currency_type
+        }
+
+        data['queue_metadata'][str(message_id)] = metadata
+        self._save_data(data)
+
+    def get_panel_metadata(self, message_id: int) -> Optional[dict]:
+        """Retorna metadados do painel unificado pelo message_id (se existir)."""
+        metadata = self.get_queue_metadata(message_id)
+        if not metadata:
+            return None
+        if metadata.get('type') != 'panel':
+            return None
+        return metadata
+
     def delete_queue_metadata(self, message_id: int):
         """Remove metadados de uma fila"""
         data = self._load_data()

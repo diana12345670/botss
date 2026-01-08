@@ -868,6 +868,7 @@ class TeamQueueButton(discord.ui.View):
             interaction.channel_id,
             team1_ids=team1,
             team2_ids=team2,
+            currency_type=currency_type,
         )
 
     @discord.ui.button(label='Entrar no Time 1', style=discord.ButtonStyle.blurple, row=0, custom_id='persistent:join_team1')
@@ -982,6 +983,323 @@ class TeamQueueButton(discord.ui.View):
         await interaction.followup.send("Você saiu da fila.", ephemeral=True)
 
 
+class Unified1v1PanelView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    async def _load_panel(self, interaction: discord.Interaction) -> Optional[dict]:
+        try:
+            return db.get_panel_metadata(interaction.message.id)
+        except Exception:
+            return None
+
+    def _queue_ids(self, message_id: int) -> tuple[str, str]:
+        return f"1v1-mob_{message_id}", f"1v1-misto_{message_id}"
+
+    async def _ensure_lock(self, queue_id: str):
+        if queue_id not in queue_locks:
+            async with queue_locks_creation_lock:
+                if queue_id not in queue_locks:
+                    queue_locks[queue_id] = asyncio.Lock()
+
+    async def _update_panel(self, interaction: discord.Interaction, bet_value: float, currency_type: str):
+        mob_qid, misto_qid = self._queue_ids(interaction.message.id)
+        mob_queue = db.get_queue(mob_qid)
+        misto_queue = db.get_queue(misto_qid)
+
+        if currency_type == "sonhos":
+            valor_formatado = format_sonhos(bet_value)
+            moeda_nome = "Sonhos"
+        else:
+            valor_formatado = f"$ {bet_value:.2f}"
+            moeda_nome = "Dinheiro"
+
+        embed_update = discord.Embed(title="Painel 1v1", color=EMBED_COLOR)
+        embed_update.add_field(name="Valor", value=valor_formatado, inline=True)
+        embed_update.add_field(name="Moeda", value=moeda_nome, inline=True)
+        embed_update.add_field(name="📱 1v1 MOB", value=f"{len(mob_queue)}/2\n{render_team_mentions(mob_queue)}", inline=True)
+        embed_update.add_field(name="💻 1v1 MISTO", value=f"{len(misto_queue)}/2\n{render_team_mentions(misto_queue)}", inline=True)
+        if interaction.guild and interaction.guild.icon:
+            embed_update.set_thumbnail(url=interaction.guild.icon.url)
+        embed_update.set_footer(text=CREATOR_FOOTER)
+
+        try:
+            message = await interaction.channel.fetch_message(interaction.message.id)
+            await message.edit(embed=embed_update)
+        except Exception as e:
+            log(f"❌ Erro ao atualizar painel 1v1 unificado: {e}")
+
+    async def _try_create_bet_if_ready(self, interaction: discord.Interaction, mode: str, queue_id: str, bet_value: float, mediator_fee: float):
+        queue = db.get_queue(queue_id)
+        if len(queue) < 2:
+            return
+
+        player1_id = queue[0]
+        player2_id = queue[1]
+
+        db.remove_from_queue(queue_id, player1_id)
+        db.remove_from_queue(queue_id, player2_id)
+
+        meta = db.get_panel_metadata(interaction.message.id) or {}
+        currency_type = meta.get('currency_type', 'sonhos')
+        await self._update_panel(interaction, bet_value, currency_type)
+
+        await create_bet_channel(
+            interaction.guild,
+            mode,
+            player1_id,
+            player2_id,
+            float(bet_value),
+            float(mediator_fee),
+            interaction.channel_id,
+            currency_type=currency_type,
+        )
+
+    @discord.ui.button(label='📱 1v1 MOB', style=discord.ButtonStyle.blurple, row=0, custom_id='persistent:panel_1v1_mob')
+    async def join_1v1_mob(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        meta = await self._load_panel(interaction)
+        if not meta:
+            await interaction.followup.send("⚠️ Dados do painel não encontrados. Recrie o painel.", ephemeral=True)
+            return
+
+        user_id = interaction.user.id
+        if db.is_user_in_active_bet(user_id):
+            await interaction.followup.send("Você já está em uma aposta ativa.", ephemeral=True)
+            return
+
+        mob_qid, misto_qid = self._queue_ids(interaction.message.id)
+        await self._ensure_lock(mob_qid)
+
+        async with queue_locks[mob_qid]:
+            mob_queue = db.get_queue(mob_qid)
+            misto_queue = db.get_queue(misto_qid)
+            if user_id in mob_queue or user_id in misto_queue:
+                await interaction.followup.send("Você já está em uma fila deste painel.", ephemeral=True)
+                return
+            db.add_to_queue(mob_qid, user_id)
+
+        meta = db.get_panel_metadata(interaction.message.id) or {}
+        currency_type = meta.get('currency_type', 'sonhos')
+        await self._update_panel(interaction, float(meta['bet_value']), currency_type)
+        await interaction.followup.send("Você entrou na fila 📱 1v1 MOB.", ephemeral=True)
+        await self._try_create_bet_if_ready(interaction, "1v1-mob", mob_qid, float(meta['bet_value']), float(meta['mediator_fee']))
+
+    @discord.ui.button(label='💻 1v1 MISTO', style=discord.ButtonStyle.blurple, row=0, custom_id='persistent:panel_1v1_misto')
+    async def join_1v1_misto(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        meta = await self._load_panel(interaction)
+        if not meta:
+            await interaction.followup.send("⚠️ Dados do painel não encontrados. Recrie o painel.", ephemeral=True)
+            return
+
+        user_id = interaction.user.id
+        if db.is_user_in_active_bet(user_id):
+            await interaction.followup.send("Você já está em uma aposta ativa.", ephemeral=True)
+            return
+
+        mob_qid, misto_qid = self._queue_ids(interaction.message.id)
+        await self._ensure_lock(misto_qid)
+
+        async with queue_locks[misto_qid]:
+            mob_queue = db.get_queue(mob_qid)
+            misto_queue = db.get_queue(misto_qid)
+            if user_id in mob_queue or user_id in misto_queue:
+                await interaction.followup.send("Você já está em uma fila deste painel.", ephemeral=True)
+                return
+            db.add_to_queue(misto_qid, user_id)
+
+        meta = db.get_panel_metadata(interaction.message.id) or {}
+        currency_type = meta.get('currency_type', 'sonhos')
+        await self._update_panel(interaction, float(meta['bet_value']), currency_type)
+        await interaction.followup.send("Você entrou na fila 💻 1v1 MISTO.", ephemeral=True)
+        await self._try_create_bet_if_ready(interaction, "1v1-misto", misto_qid, float(meta['bet_value']), float(meta['mediator_fee']))
+
+    @discord.ui.button(label='🚪 Sair da fila', style=discord.ButtonStyle.gray, row=1, custom_id='persistent:panel_1v1_leave')
+    async def leave_panel_1v1(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        meta = await self._load_panel(interaction)
+        if not meta:
+            await interaction.followup.send("⚠️ Dados do painel não encontrados. Recrie o painel.", ephemeral=True)
+            return
+
+        user_id = interaction.user.id
+        mob_qid, misto_qid = self._queue_ids(interaction.message.id)
+
+        removed = False
+
+        await self._ensure_lock(mob_qid)
+        await self._ensure_lock(misto_qid)
+
+        async with queue_locks[mob_qid]:
+            if user_id in db.get_queue(mob_qid):
+                db.remove_from_queue(mob_qid, user_id)
+                removed = True
+
+        async with queue_locks[misto_qid]:
+            if user_id in db.get_queue(misto_qid):
+                db.remove_from_queue(misto_qid, user_id)
+                removed = True
+
+        meta = db.get_panel_metadata(interaction.message.id) or {}
+        currency_type = meta.get('currency_type', 'sonhos')
+        await self._update_panel(interaction, float(meta['bet_value']), currency_type)
+        await interaction.followup.send("Você saiu da fila." if removed else "Você não está em nenhuma fila deste painel.", ephemeral=True)
+
+
+class Unified2v2PanelView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    async def _load_panel(self, interaction: discord.Interaction) -> Optional[dict]:
+        try:
+            return db.get_panel_metadata(interaction.message.id)
+        except Exception:
+            return None
+
+    def _base_qid(self, mode: str, message_id: int) -> str:
+        return f"{mode}_{message_id}"
+
+    def _team_qids(self, base_qid: str) -> tuple[str, str]:
+        return f"{base_qid}_team1", f"{base_qid}_team2"
+
+    async def _ensure_lock(self, queue_id: str):
+        if queue_id not in queue_locks:
+            async with queue_locks_creation_lock:
+                if queue_id not in queue_locks:
+                    queue_locks[queue_id] = asyncio.Lock()
+
+    def _all_team_qids(self, message_id: int) -> list[str]:
+        mob_base = self._base_qid("2v2-mob", message_id)
+        misto_base = self._base_qid("2v2-misto", message_id)
+        mob_t1, mob_t2 = self._team_qids(mob_base)
+        misto_t1, misto_t2 = self._team_qids(misto_base)
+        return [mob_t1, mob_t2, misto_t1, misto_t2]
+
+    async def _update_panel(self, interaction: discord.Interaction, bet_value: float, currency_type: str):
+        message_id = interaction.message.id
+
+        mob_base = self._base_qid("2v2-mob", message_id)
+        misto_base = self._base_qid("2v2-misto", message_id)
+        mob_t1, mob_t2 = self._team_qids(mob_base)
+        misto_t1, misto_t2 = self._team_qids(misto_base)
+
+        mob1 = db.get_queue(mob_t1)
+        mob2 = db.get_queue(mob_t2)
+        misto1 = db.get_queue(misto_t1)
+        misto2 = db.get_queue(misto_t2)
+
+        if currency_type == "sonhos":
+            valor_formatado = format_sonhos(bet_value)
+            moeda_nome = "Sonhos"
+        else:
+            valor_formatado = f"$ {bet_value:.2f}"
+            moeda_nome = "Dinheiro"
+
+        embed_update = discord.Embed(title="Painel 2v2", color=EMBED_COLOR)
+        embed_update.add_field(name="Valor", value=valor_formatado, inline=True)
+        embed_update.add_field(name="Moeda", value=moeda_nome, inline=True)
+        embed_update.add_field(
+            name="📱 2v2 MOB",
+            value=(
+                f"T1 {len(mob1)}/2\n{render_team_mentions(mob1)}\n"
+                f"T2 {len(mob2)}/2\n{render_team_mentions(mob2)}"
+            ),
+            inline=True
+        )
+        embed_update.add_field(
+            name="💻 2v2 MISTO",
+            value=(
+                f"T1 {len(misto1)}/2\n{render_team_mentions(misto1)}\n"
+                f"T2 {len(misto2)}/2\n{render_team_mentions(misto2)}"
+            ),
+            inline=True
+        )
+        if interaction.guild and interaction.guild.icon:
+            embed_update.set_thumbnail(url=interaction.guild.icon.url)
+        embed_update.set_footer(text=CREATOR_FOOTER)
+
+        try:
+            message = await interaction.channel.fetch_message(interaction.message.id)
+            await message.edit(embed=embed_update)
+        except Exception as e:
+            log(f"❌ Erro ao atualizar painel 2v2 unificado: {e}")
+
+    async def _try_create_bet_if_full(self, interaction: discord.Interaction, mode: str, base_qid: str, bet_value: float, mediator_fee: float, currency_type: str):
+        team1_qid, team2_qid = self._team_qids(base_qid)
+        team1 = db.get_queue(team1_qid)
+        team2 = db.get_queue(team2_qid)
+        if len(team1) < 2 or len(team2) < 2:
+            return
+
+        db.set_queue(team1_qid, [])
+        db.set_queue(team2_qid, [])
+
+        await self._update_panel(interaction, bet_value, currency_type)
+
+        await create_bet_channel(
+            interaction.guild,
+            mode,
+            team1[0],
+            team2[0],
+            float(bet_value),
+            float(mediator_fee),
+            interaction.channel_id,
+            currency_type=currency_type,
+        )
+
+    @discord.ui.button(label='📱 2v2 MOB – Time 1', style=discord.ButtonStyle.blurple, row=0, custom_id='persistent:panel_2v2_mob_t1')
+    async def join_2v2_mob_t1(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._join_team(interaction, "2v2-mob", 1)
+
+    @discord.ui.button(label='📱 2v2 MOB – Time 2', style=discord.ButtonStyle.blurple, row=0, custom_id='persistent:panel_2v2_mob_t2')
+    async def join_2v2_mob_t2(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._join_team(interaction, "2v2-mob", 2)
+
+    @discord.ui.button(label='💻 2v2 MISTO – Time 1', style=discord.ButtonStyle.blurple, row=1, custom_id='persistent:panel_2v2_misto_t1')
+    async def join_2v2_misto_t1(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._join_team(interaction, "2v2-misto", 1)
+
+    @discord.ui.button(label='💻 2v2 MISTO – Time 2', style=discord.ButtonStyle.blurple, row=1, custom_id='persistent:panel_2v2_misto_t2')
+    async def join_2v2_misto_t2(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._join_team(interaction, "2v2-misto", 2)
+
+    @discord.ui.button(label='🚪 Sair da fila', style=discord.ButtonStyle.gray, row=2, custom_id='persistent:panel_2v2_leave')
+    async def leave_panel_2v2(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        meta = await self._load_panel(interaction)
+        if not meta:
+            await interaction.followup.send("⚠️ Dados do painel não encontrados. Recrie o painel.", ephemeral=True)
+            return
+
+        user_id = interaction.user.id
+        message_id = interaction.message.id
+        removed = False
+
+        mob_base = self._base_qid("2v2-mob", message_id)
+        misto_base = self._base_qid("2v2-misto", message_id)
+
+        await self._ensure_lock(mob_base)
+        await self._ensure_lock(misto_base)
+
+        async with queue_locks[mob_base]:
+            for qid in self._all_team_qids(message_id)[:2]:
+                if user_id in db.get_queue(qid):
+                    db.remove_from_queue(qid, user_id)
+                    removed = True
+
+        async with queue_locks[misto_base]:
+            for qid in self._all_team_qids(message_id)[2:]:
+                if user_id in db.get_queue(qid):
+                    db.remove_from_queue(qid, user_id)
+                    removed = True
+
+        meta = db.get_panel_metadata(interaction.message.id) or {}
+        currency_type = meta.get('currency_type', 'sonhos')
+        await self._update_panel(interaction, float(meta['bet_value']), currency_type)
+        await interaction.followup.send("Você saiu da fila." if removed else "Você não está em nenhuma fila deste painel.", ephemeral=True)
+
+
 class ConfirmPaymentButton(discord.ui.View):
     def __init__(self, bet_id: str):
         super().__init__(timeout=None)
@@ -1066,7 +1384,7 @@ class ConfirmPaymentButton(discord.ui.View):
             return
 
         if bet.is_fully_confirmed():
-            # Usa menções diretas (economiza chamadas API)
+            # Usa menções diretas (economiza API calls)
             embed = discord.Embed(
                 title="Pagamentos Confirmados",
                 description="Partida liberada",
@@ -1185,7 +1503,8 @@ class AcceptMediationButton(discord.ui.View):
             else:
                 log(f"❌ Aposta não encontrada nem por bet_id nem por channel_id")
                 await interaction.response.send_message(
-                    "Esta aposta não foi encontrada.",
+                    "Esta aposta não foi encontrada.\n"
+                    "Use o comando /confirmar-pagamento dentro do tópico da aposta.",
                     ephemeral=True
                 )
                 return
@@ -1681,6 +2000,36 @@ async def on_message_delete(message):
         metadata = db.get_queue_metadata(message.id)
 
         if metadata:
+            if metadata.get('type') == 'panel':
+                panel_type = metadata.get('panel_type')
+                log(f"🗑️ Mensagem de painel deletada (ID: {message.id})")
+
+                data = db._load_data()
+                if panel_type == '1v1':
+                    mob_qid = f"1v1-mob_{message.id}"
+                    misto_qid = f"1v1-misto_{message.id}"
+                    for qid in (mob_qid, misto_qid):
+                        if qid in data.get('queues', {}):
+                            data['queues'][qid] = []
+                        if qid in data.get('queue_timestamps', {}):
+                            data['queue_timestamps'][qid] = {}
+                elif panel_type == '2v2':
+                    mob_base = f"2v2-mob_{message.id}"
+                    misto_base = f"2v2-misto_{message.id}"
+                    qids = [
+                        f"{mob_base}_team1", f"{mob_base}_team2",
+                        f"{misto_base}_team1", f"{misto_base}_team2",
+                    ]
+                    for qid in qids:
+                        if qid in data.get('queues', {}):
+                            data['queues'][qid] = []
+                        if qid in data.get('queue_timestamps', {}):
+                            data['queue_timestamps'][qid] = {}
+
+                db._save_data(data)
+                log(f"✅ Painel {panel_type} limpo (metadados preservados para reuso)")
+                return
+
             queue_id = metadata['queue_id']
             log(f"🗑️ Mensagem de painel deletada (ID: {message.id})")
             log(f"🧹 Limpando apenas jogadores da fila {queue_id} (metadados preservados)...")
@@ -1756,6 +2105,8 @@ async def on_ready():
     if not hasattr(bot, '_persistent_views_registered'):
         bot.add_view(QueueButton(mode="", bet_value=0, mediator_fee=0, currency_type="sonhos"))
         bot.add_view(TeamQueueButton(mode="2v2-misto", bet_value=0, mediator_fee=0, currency_type="sonhos"))
+        bot.add_view(Unified1v1PanelView())
+        bot.add_view(Unified2v2PanelView())
         bot.add_view(ConfirmPaymentButton(bet_id=""))
         bot.add_view(AcceptMediationButton(bet_id=""))
         bot.add_view(MediatorCentralView())
@@ -1782,6 +2133,8 @@ async def on_ready():
 
         # PASSO 2: Recuperar metadados e popular queue_messages
         for message_id_str, metadata in all_metadata.items():
+            if metadata.get('type') == 'panel':
+                continue
             queue_id = metadata['queue_id']
             channel_id = metadata['channel_id']
             message_id = metadata['message_id']
@@ -1892,6 +2245,8 @@ async def on_resumed():
         if not queue_messages and all_metadata:
             log('⚠️ Detectado queue_messages vazio após reconexão - recuperando do banco...')
             for message_id_str, metadata in all_metadata.items():
+                if metadata.get('type') == 'panel':
+                    continue
                 queue_id = metadata['queue_id']
                 channel_id = metadata['channel_id']
                 message_id = metadata['message_id']
@@ -1950,7 +2305,6 @@ def register_all_commands(target_bot):
                 log(f"  ✅ Comando /{command.name} copiado")
         except Exception as e:
             log(f"  ⚠️ Erro ao copiar comando /{command.name}: {e}")
-            logger.exception("Stacktrace completo:")
     
     log(f"✅ Comandos copiados para o bot alvo")
 
@@ -1963,10 +2317,8 @@ def register_all_commands(target_bot):
     moeda="Tipo de moeda da aposta (Dinheiro ou Sonhos)"
 )
 @app_commands.choices(modo=[
-    app_commands.Choice(name="1v1 Misto", value="1v1-misto"),
-    app_commands.Choice(name="1v1 Mob", value="1v1-mob"),
-    app_commands.Choice(name="2v2 Misto", value="2v2-misto"),
-    app_commands.Choice(name="2v2 Mob", value="2v2-mob"),
+    app_commands.Choice(name="Painel 1v1", value="1v1"),
+    app_commands.Choice(name="Painel 2v2", value="2v2"),
 ])
 @app_commands.choices(moeda=[
     app_commands.Choice(name="Dinheiro", value="reais"),
@@ -1993,7 +2345,7 @@ async def mostrar_fila(interaction: discord.Interaction, modo: app_commands.Choi
             )
         return
 
-    mode = modo.value
+    panel_type = modo.value
     currency_type = moeda.value
 
     # Converte o valor usando a função parse_value
@@ -2037,17 +2389,30 @@ async def mostrar_fila(interaction: discord.Interaction, modo: app_commands.Choi
         valor_formatado = f"$ {valor_numerico:.2f}"
 
     embed = discord.Embed(
-        title=modo.name,
+        title="Painel 2v2" if panel_type == "2v2" else "Painel 1v1",
         color=EMBED_COLOR
     )
 
     embed.add_field(name="Valor", value=valor_formatado, inline=True)
     embed.add_field(name="Moeda", value=moeda.name, inline=True)
-    if "2v2" in mode:
-        embed.add_field(name="Time 1", value="0/2\nVazio", inline=True)
-        embed.add_field(name="Time 2", value="0/2\nVazio", inline=True)
+    if panel_type == "2v2":
+        embed.add_field(
+            name="📱 2v2 MOB",
+            value=(
+                f"T1 0/2\nT2 0/2"
+            ),
+            inline=True
+        )
+        embed.add_field(
+            name="💻 2v2 MISTO",
+            value=(
+                f"T1 0/2\nT2 0/2"
+            ),
+            inline=True
+        )
     else:
-        embed.add_field(name="Fila", value="Vazio", inline=False)
+        embed.add_field(name="📱 1v1 MOB", value="0/2\nVazio", inline=True)
+        embed.add_field(name="💻 1v1 MISTO", value="0/2\nVazio", inline=True)
     if interaction.guild.icon:
         embed.set_thumbnail(url=interaction.guild.icon.url)
     embed.set_footer(text=CREATOR_FOOTER)
@@ -2060,34 +2425,26 @@ async def mostrar_fila(interaction: discord.Interaction, modo: app_commands.Choi
 
     log(f"Mensagem da fila criada com ID: {message.id}")
 
-    # Cria o view COM o message_id correto
-    view = TeamQueueButton(mode, valor_numerico, taxa_numerica, message.id, currency_type) if "2v2" in mode else QueueButton(mode, valor_numerico, taxa_numerica, message.id, currency_type)
+    view = Unified2v2PanelView() if panel_type == "2v2" else Unified1v1PanelView()
 
-    # Salva os metadados da fila no banco de dados ANTES de editar a mensagem
-    queue_id = f"{mode}_{message.id}"
-    db.save_queue_metadata(message.id, mode, valor_numerico, taxa_numerica, interaction.channel.id, currency_type)
-    log(f"Metadados salvos: queue_id={queue_id}, bet_value={valor_numerico}, mediator_fee={taxa_numerica}, currency={currency_type}")
-
-    # Salva a informação da fila em memória
-    queue_messages[queue_id] = (interaction.channel.id, message.id, mode, valor_numerico, currency_type)
-    log(f"Fila registrada em memória: {queue_id}")
+    db.save_panel_metadata(message.id, panel_type, valor_numerico, taxa_numerica, interaction.channel.id, currency_type)
+    log(f"Metadados do painel salvos: panel_type={panel_type}, bet_value={valor_numerico}, mediator_fee={taxa_numerica}, currency={currency_type}")
 
     # Agora edita a mensagem com os botões
     await message.edit(embed=embed, view=view)
-    log(f"Fila criada e pronta para uso: {mode} com moeda {currency_type}")
+    log(f"Painel criado e pronto para uso: {panel_type} com moeda {currency_type}")
 
 
 @bot.tree.command(name="preset-filas", description="[MODERADOR] Criar várias filas com valores pré-definidos")
+
 @app_commands.describe(
     modo="Escolha o modo de jogo",
     taxa="Taxa do mediador (exemplo: 5%, 500, 1k)",
     moeda="Tipo de moeda da aposta (Dinheiro ou Sonhos)"
 )
 @app_commands.choices(modo=[
-    app_commands.Choice(name="1v1 Misto", value="1v1-misto"),
-    app_commands.Choice(name="1v1 Mob", value="1v1-mob"),
-    app_commands.Choice(name="2v2 Misto", value="2v2-misto"),
-    app_commands.Choice(name="2v2 Mob", value="2v2-mob"),
+    app_commands.Choice(name="Painel 1v1", value="1v1"),
+    app_commands.Choice(name="Painel 2v2", value="2v2"),
 ])
 @app_commands.choices(moeda=[
     app_commands.Choice(name="Dinheiro", value="reais"),
@@ -2114,7 +2471,7 @@ async def preset_filas(interaction: discord.Interaction, modo: app_commands.Choi
             )
         return
 
-    mode = modo.value
+    panel_type = modo.value
     currency_type = moeda.value
 
     # Define valores preset baseado na moeda
@@ -2129,7 +2486,7 @@ async def preset_filas(interaction: discord.Interaction, modo: app_commands.Choi
     # Defer a resposta para evitar timeout
     await interaction.response.defer(ephemeral=True)
 
-    log(f"🎯 Criando preset de filas: modo={mode}, moeda={currency_type}, taxa={taxa_str}")
+    log(f"🎯 Criando preset de filas: modo={modo.value}, moeda={currency_type}, taxa={taxa_str}")
 
     created_count = 0
     tasks = []
@@ -2166,17 +2523,30 @@ async def preset_filas(interaction: discord.Interaction, modo: app_commands.Choi
                 valor_formatado = f"$ {valor_numerico:.2f}"
 
             embed = discord.Embed(
-                title=modo.name,
+                title="Painel 2v2" if panel_type == "2v2" else "Painel 1v1",
                 color=EMBED_COLOR
             )
 
             embed.add_field(name="Valor", value=valor_formatado, inline=True)
             embed.add_field(name="Moeda", value=moeda.name, inline=True)
-            if "2v2" in mode:
-                embed.add_field(name="Time 1", value="0/2\nVazio", inline=True)
-                embed.add_field(name="Time 2", value="0/2\nVazio", inline=True)
+            if panel_type == "2v2":
+                embed.add_field(
+                    name="📱 2v2 MOB",
+                    value=(
+                        f"T1 0/2\nT2 0/2"
+                    ),
+                    inline=True
+                )
+                embed.add_field(
+                    name="💻 2v2 MISTO",
+                    value=(
+                        f"T1 0/2\nT2 0/2"
+                    ),
+                    inline=True
+                )
             else:
-                embed.add_field(name="Fila", value="Vazio", inline=False)
+                embed.add_field(name="📱 1v1 MOB", value="0/2\nVazio", inline=True)
+                embed.add_field(name="💻 1v1 MISTO", value="0/2\nVazio", inline=True)
             if interaction.guild.icon:
                 embed.set_thumbnail(url=interaction.guild.icon.url)
             embed.set_footer(text=CREATOR_FOOTER)
@@ -2186,15 +2556,9 @@ async def preset_filas(interaction: discord.Interaction, modo: app_commands.Choi
 
             log(f"📋 Fila preset criada: {valor_formatado} (ID: {message.id})")
 
-            # Cria o view COM o message_id correto
-            view = TeamQueueButton(mode, valor_numerico, taxa_numerica, message.id, currency_type) if "2v2" in mode else QueueButton(mode, valor_numerico, taxa_numerica, message.id, currency_type)
+            view = Unified2v2PanelView() if panel_type == "2v2" else Unified1v1PanelView()
 
-            # Salva os metadados da fila no banco de dados
-            queue_id = f"{mode}_{message.id}"
-            db.save_queue_metadata(message.id, mode, valor_numerico, taxa_numerica, interaction.channel.id, currency_type)
-
-            # Salva a informação da fila em memória
-            queue_messages[queue_id] = (interaction.channel.id, message.id, mode, valor_numerico, currency_type)
+            db.save_panel_metadata(message.id, panel_type, valor_numerico, taxa_numerica, interaction.channel.id, currency_type)
 
             # Adiciona a tarefa de editar com botões à lista (será executado em batch)
             tasks.append((message, embed, view, valor_formatado))
@@ -2225,7 +2589,7 @@ async def preset_filas(interaction: discord.Interaction, modo: app_commands.Choi
     log(f"✅ Preset de filas concluído: {created_count} filas criadas")
 
 
-async def create_bet_channel(guild: discord.Guild, mode: str, player1_id: int, player2_id: int, bet_value: float, mediator_fee: float, source_channel_id: int = None, team1_ids: Optional[list[int]] = None, team2_ids: Optional[list[int]] = None):
+async def create_bet_channel(guild: discord.Guild, mode: str, player1_id: int, player2_id: int, bet_value: float, mediator_fee: float, source_channel_id: int = None, team1_ids: Optional[list[int]] = None, team2_ids: Optional[list[int]] = None, currency_type: str = None):
     log(f"🔧 create_bet_channel chamada: mode={mode}, player1={player1_id}, player2={player2_id}, bet_value={bet_value}, mediator_fee={mediator_fee}")
 
     # VALIDAÇÃO CRÍTICA: Nunca permitir valores zero
@@ -2360,24 +2724,24 @@ async def create_bet_channel(guild: discord.Guild, mode: str, player1_id: int, p
                 await thread.set_permissions(member, overwrite=overwrite)
             log(f"✅ Permissões configuradas para os jogadores no tópico")
         except Exception as e:
-            log(f"⚠️ Erro ao configurar permissões do tópico: {e}")
+            log(f" Erro ao configurar permissões do tópico: {e}")
 
         bet_id = f"{player1_id}_{player2_id}_{int(datetime.now().timestamp())}"
 
         # Log final antes de criar o objeto Bet
-        log(f"💰 Criando objeto Bet com valores: bet_value={bet_value}, mediator_fee={mediator_fee}")
-        log(f"🆔 Thread criado com ID: {thread.id} (type={type(thread.id)})")
+        log(f" Criando objeto Bet com valores: bet_value={bet_value}, mediator_fee={mediator_fee}")
+        log(f" Thread criado com ID: {thread.id} (type={type(thread.id)})")
 
-        # Busca o tipo de moeda do metadata da fila usando o source_channel_id
-        # Como já temos o queue_id no formato mode_message_id, vamos buscar no metadados globais
-        currency_type = 'sonhos'  # Valor padrão
+        # Determina currency_type (prioridade: argumento -> metadados antigos)
+        if currency_type is None:
+            currency_type = 'sonhos'  # Valor padrão
 
-        # Tenta encontrar nos metadados salvos
-        all_metadata = db.get_all_queue_metadata()
-        for msg_id, meta in all_metadata.items():
-            if meta.get('mode') == mode and meta.get('channel_id') == source_channel_id:
-                currency_type = meta.get('currency_type', 'sonhos')
-                break
+            # Tenta encontrar nos metadados salvos (painéis antigos / filas antigas)
+            all_metadata = db.get_all_queue_metadata()
+            for msg_id, meta in all_metadata.items():
+                if meta.get('mode') == mode and meta.get('channel_id') == source_channel_id:
+                    currency_type = meta.get('currency_type', 'sonhos')
+                    break
 
         bet = Bet(
             bet_id=bet_id,
@@ -2395,7 +2759,7 @@ async def create_bet_channel(guild: discord.Guild, mode: str, player1_id: int, p
 
         db.add_active_bet(bet)
 
-        log(f"✅ Bet criado e salvo no banco:")
+        log(f" Bet criado e salvo no banco:")
         log(f"   - bet_id: {bet.bet_id}")
         log(f"   - channel_id: {bet.channel_id}")
         log(f"   - bet_value: {bet.bet_value}")
@@ -2417,13 +2781,13 @@ async def create_bet_channel(guild: discord.Guild, mode: str, player1_id: int, p
         admin_mention = "@Mediadores (configure com /setup)"
 
     # Log para debug - verificar valores recebidos
-    log(f"💰 Criando embed com valores: bet_value={bet_value}, mediator_fee={mediator_fee}")
+    log(f" Criando embed com valores: bet_value={bet_value}, mediator_fee={mediator_fee}")
 
     # Formata valores usando a função format_sonhos
     valor_formatado = format_sonhos(float(bet_value))
     taxa_formatada = format_sonhos(float(mediator_fee))
 
-    log(f"💰 Valores formatados: {valor_formatado} / {taxa_formatada}")
+    log(f" Valores formatados: {valor_formatado} / {taxa_formatada}")
 
     # ========== CENTRAL DE MEDIADORES - ATRIBUIÇÃO AUTOMÁTICA ==========
     # Verifica se o Central de Mediadores está configurado
@@ -2432,14 +2796,14 @@ async def create_bet_channel(guild: discord.Guild, mode: str, player1_id: int, p
     auto_mediator_pix = None
 
     if central_configured:
-        log(f"🏢 Central de Mediadores está configurado para guild {guild.id}")
+        log(f" Central de Mediadores está configurado para guild {guild.id}")
 
         # Tenta pegar o primeiro mediador da fila (sistema FIFO)
         mediator_data = db.get_first_mediator_from_central(guild.id)
 
         if mediator_data:
             auto_mediator_id, auto_mediator_pix = mediator_data
-            log(f"✅ Mediador automático selecionado: {auto_mediator_id}")
+            log(f" Mediador automático selecionado: {auto_mediator_id}")
 
             # Remove o mediador do central (já foi atribuído)
             db.remove_mediator_from_central(guild.id, auto_mediator_id)
@@ -2455,7 +2819,7 @@ async def create_bet_channel(guild: discord.Guild, mode: str, player1_id: int, p
                 try:
                     auto_mediator = await guild.fetch_member(auto_mediator_id)
                 except:
-                    log(f"⚠️ Não foi possível encontrar o mediador {auto_mediator_id}")
+                    log(f" Não foi possível encontrar o mediador {auto_mediator_id}")
                     auto_mediator = None
                     # Limpa o mediador da aposta se não encontrou
                     bet.mediator_id = 0
@@ -2465,7 +2829,7 @@ async def create_bet_channel(guild: discord.Guild, mode: str, player1_id: int, p
             # Atualiza o painel do central
             await update_mediator_central_panel(guild)
         else:
-            log(f"⚠️ Central configurado mas sem mediadores disponíveis")
+            log(f" Central configurado mas sem mediadores disponíveis")
 
     # Se tem mediador automático atribuído
     if auto_mediator:
@@ -2481,9 +2845,9 @@ async def create_bet_channel(guild: discord.Guild, mode: str, player1_id: int, p
                     read_message_history=True
                 )
             )
-            log(f"✅ Mediador {auto_mediator.name} adicionado ao tópico")
+            log(f" Mediador {auto_mediator.name} adicionado ao tópico")
         except Exception as e:
-            log(f"⚠️ Erro ao adicionar mediador ao tópico: {e}")
+            log(f" Erro ao adicionar mediador ao tópico: {e}")
 
         # Cria embed de mediador já aceito
         embed = discord.Embed(
@@ -2575,305 +2939,6 @@ async def create_bet_channel(guild: discord.Guild, mode: str, player1_id: int, p
         )
 
 
-@bot.tree.command(name="confirmar-pagamento", description="Confirmar que você enviou o pagamento ao mediador")
-async def confirmar_pagamento(interaction: discord.Interaction):
-
-    log(f"🔍 /confirmar-pagamento chamado no canal {interaction.channel_id} por usuário {interaction.user.id}")
-    bet = db.get_bet_by_channel(interaction.channel_id)
-
-    if not bet:
-        log(f"❌ Aposta não encontrada para canal {interaction.channel_id}")
-        await interaction.response.send_message(
-            "Este canal não é uma aposta ativa.\n"
-            "Use este comando dentro do tópico da aposta.",
-            ephemeral=True
-        )
-        return
-
-    log(f"✅ Aposta encontrada: {bet.bet_id}")
-
-    if bet.mediator_id == 0:
-        await interaction.response.send_message(
-            "Aguarde um mediador aceitar esta aposta antes de confirmar pagamento.",
-            ephemeral=True
-        )
-        return
-
-    user_id = interaction.user.id
-
-    if is_2v2_mode(bet.mode):
-        team1_ids = bet.team1_ids or []
-        team2_ids = bet.team2_ids or []
-
-        if user_id in team1_ids:
-            if bet.team1_confirmed:
-                await interaction.response.send_message("O Time 1 já confirmou o pagamento.", ephemeral=True)
-                return
-            bet.team1_confirmed = True
-            db.update_active_bet(bet)
-            embed = discord.Embed(title="Pagamento Confirmado", description="Time 1", color=EMBED_COLOR)
-            await interaction.response.send_message(embed=embed)
-        elif user_id in team2_ids:
-            if bet.team2_confirmed:
-                await interaction.response.send_message("O Time 2 já confirmou o pagamento.", ephemeral=True)
-                return
-            bet.team2_confirmed = True
-            db.update_active_bet(bet)
-            embed = discord.Embed(title="Pagamento Confirmado", description="Time 2", color=EMBED_COLOR)
-            await interaction.response.send_message(embed=embed)
-        else:
-            await interaction.response.send_message("Você não é um dos jogadores desta aposta.", ephemeral=True)
-            return
-
-    elif user_id == bet.player1_id:
-        if bet.player1_confirmed:
-            await interaction.response.send_message(
-                "Você já confirmou seu pagamento.",
-                ephemeral=True
-            )
-            return
-
-        bet.player1_confirmed = True
-        db.update_active_bet(bet)
-
-        player1 = await interaction.guild.fetch_member(bet.player1_id)
-        mediator = await interaction.guild.fetch_member(bet.mediator_id)
-
-        embed = discord.Embed(
-            title="Pagamento Confirmado",
-            description=player1.mention,
-            color=EMBED_COLOR
-        )
-        await interaction.response.send_message(embed=embed)
-
-    elif user_id == bet.player2_id:
-        if bet.player2_confirmed:
-            await interaction.response.send_message(
-                "Você já confirmou seu pagamento.",
-                ephemeral=True
-            )
-            return
-
-        bet.player2_confirmed = True
-        db.update_active_bet(bet)
-
-        player2 = await interaction.guild.fetch_member(bet.player2_id)
-        mediator = await interaction.guild.fetch_member(bet.mediator_id)
-
-        embed = discord.Embed(
-            title="Pagamento Confirmado",
-            description=player2.mention,
-            color=EMBED_COLOR
-        )
-        await interaction.response.send_message(embed=embed)
-    else:
-        await interaction.response.send_message(
-            "Você não é um dos jogadores desta aposta.",
-            ephemeral=True
-        )
-        return
-
-    if bet.is_fully_confirmed():
-        embed = discord.Embed(
-            title="Pagamentos Confirmados",
-            description="Partida liberada",
-            color=EMBED_COLOR
-        )
-
-        await interaction.channel.send(embed=embed)
-
-
-@bot.tree.command(name="finalizar-aposta", description="[MEDIADOR] Finalizar a aposta e declarar vencedor")
-@app_commands.describe(vencedor="Mencione o jogador vencedor")
-async def finalizar_aposta(interaction: discord.Interaction, vencedor: discord.Member):
-
-    log(f"🔍 /finalizar-aposta chamado")
-    log(f"   - Canal ID: {interaction.channel_id} (type={type(interaction.channel_id)})")
-    log(f"   - Canal: {interaction.channel}")
-    log(f"   - É Thread? {isinstance(interaction.channel, discord.Thread)}")
-
-    bet = db.get_bet_by_channel(interaction.channel_id)
-
-    if not bet:
-        log(f"❌ Aposta não encontrada para canal {interaction.channel_id}")
-        all_bets = db.get_all_active_bets()
-        log(f"📊 Apostas ativas: {len(all_bets)}")
-        for bet_id, active_bet in all_bets.items():
-            log(f"  - Bet {bet_id}: canal={active_bet.channel_id}")
-
-        await interaction.response.send_message(
-            "Este tópico não é uma aposta ativa.\n"
-            "Verifique se você está no tópico correto da aposta.",
-            ephemeral=True
-        )
-        return
-
-    log(f"✅ Aposta encontrada: {bet.bet_id}")
-
-    # Verifica se é o mediador da aposta OU se tem o cargo de mediador
-    mediator_role_id = db.get_mediator_role(interaction.guild.id)
-    has_mediator_role = mediator_role_id and discord.utils.get(interaction.user.roles, id=mediator_role_id) is not None
-    is_bet_mediator = interaction.user.id == bet.mediator_id
-
-    if not is_bet_mediator and not has_mediator_role:
-        await interaction.response.send_message(
-            "Apenas o mediador desta aposta ou membros com o cargo de mediador podem finalizá-la.",
-            ephemeral=True
-        )
-        return
-
-    if is_2v2_mode(bet.mode):
-        await interaction.response.send_message(
-            "Esta aposta é 2v2. Use /finalizar-aposta-2v2.",
-            ephemeral=True
-        )
-        return
-
-    if vencedor.id not in [bet.player1_id, bet.player2_id]:
-        await interaction.response.send_message(
-            "O vencedor deve ser um dos jogadores desta aposta.",
-            ephemeral=True
-        )
-        return
-
-    bet.winner_id = vencedor.id
-    bet.finished_at = datetime.now().isoformat()
-
-    # Usa menções diretas (economiza chamadas API)
-    loser_id = bet.player2_id if vencedor.id == bet.player1_id else bet.player1_id
-
-    embed = discord.Embed(
-        title="Vencedor",
-        description=vencedor.mention,
-        color=EMBED_COLOR
-    )
-    embed.add_field(name="Modo", value=bet.mode.replace("-", " ").title(), inline=True)
-    embed.add_field(name="Perdedor", value=f"<@{loser_id}>", inline=True)
-    embed.set_footer(text=CREATOR_FOOTER)
-
-    await interaction.response.send_message(embed=embed)
-
-    # ========== DEVOLVE MEDIADOR AO FINAL DA FILA ==========
-    # Se tinha mediador automático do central, devolve ao final da fila
-    if bet.mediator_id and bet.mediator_pix:
-        central_configured = db.is_mediator_central_configured(interaction.guild.id)
-        if central_configured:
-            success = db.add_mediator_to_end_of_central(interaction.guild.id, bet.mediator_id, bet.mediator_pix)
-            if success:
-                log(f"🔄 Mediador {bet.mediator_id} devolvido ao final da fila do central")
-                await update_mediator_central_panel(interaction.guild)
-            else:
-                log(f"⚠️ Não foi possível devolver mediador {bet.mediator_id} à fila (cheia ou central não configurado)")
-
-    db.finish_bet(bet)
-
-    # Envia resultado no canal configurado (se houver)
-    results_channel_id = db.get_results_channel(interaction.guild.id)
-    if results_channel_id:
-        try:
-            results_channel = bot.get_channel(results_channel_id)
-            if results_channel:
-                # Cria embed para o canal de resultados
-                results_embed = discord.Embed(
-                    title="Resultado da Partida",
-                    color=EMBED_COLOR
-                )
-                results_embed.add_field(name="Vencedor", value=vencedor.mention, inline=True)
-                results_embed.add_field(name="Perdedor", value=f"<@{loser_id}>", inline=True)
-                results_embed.add_field(name="Modo", value=bet.mode.replace("-", " ").title(), inline=True)
-                results_embed.add_field(name="Valor", value=format_sonhos(bet.bet_value), inline=True)
-                results_embed.add_field(name="Mediador", value=f"<@{bet.mediator_id}>", inline=True)
-                if interaction.guild.icon:
-                    results_embed.set_thumbnail(url=interaction.guild.icon.url)
-                results_embed.set_footer(text=CREATOR_FOOTER)
-
-                await results_channel.send(embed=results_embed)
-                log(f"📢 Resultado enviado ao canal {results_channel.name}")
-        except Exception as e:
-            log(f"⚠️ Erro ao enviar resultado para canal: {e}")
-
-    import asyncio
-    await asyncio.sleep(10)
-
-    try:
-        # Arquiva e bloqueia o tópico ao invés de deletar
-        if isinstance(interaction.channel, discord.Thread):
-            await interaction.channel.edit(archived=True, locked=True)
-    except discord.HTTPException as e:
-        log(f"Não foi possível arquivar thread (permissões ou thread já arquivado): {e.status}")
-    except Exception as e:
-        log(f"Erro ao arquivar thread: {e}")
-
-
-@bot.tree.command(name="finalizar-aposta-2v2", description="[MEDIADOR] Finalizar a aposta 2v2 e declarar time vencedor")
-@app_commands.describe(time_vencedor="Escolha o time vencedor")
-@app_commands.choices(time_vencedor=[
-    app_commands.Choice(name="Time 1", value=1),
-    app_commands.Choice(name="Time 2", value=2),
-])
-async def finalizar_aposta_2v2(interaction: discord.Interaction, time_vencedor: app_commands.Choice[int]):
-    bet = db.get_bet_by_channel(interaction.channel_id)
-
-    if not bet:
-        await interaction.response.send_message(
-            "Este tópico não é uma aposta ativa.",
-            ephemeral=True
-        )
-        return
-
-    if not is_2v2_mode(bet.mode):
-        await interaction.response.send_message(
-            "Esta aposta não é 2v2. Use /finalizar-aposta.",
-            ephemeral=True
-        )
-        return
-
-    mediator_role_id = db.get_mediator_role(interaction.guild.id)
-    has_mediator_role = mediator_role_id and discord.utils.get(interaction.user.roles, id=mediator_role_id) is not None
-    is_bet_mediator = interaction.user.id == bet.mediator_id
-
-    if not is_bet_mediator and not has_mediator_role:
-        await interaction.response.send_message(
-            "Apenas o mediador desta aposta ou membros com o cargo de mediador podem finalizá-la.",
-            ephemeral=True
-        )
-        return
-
-    bet.winner_team = time_vencedor.value
-    bet.finished_at = datetime.now().isoformat()
-
-    embed = discord.Embed(
-        title="Vencedor",
-        description=f"Time {time_vencedor.value}",
-        color=EMBED_COLOR
-    )
-    embed.add_field(name="Modo", value=bet.mode.replace("-", " ").title(), inline=True)
-    embed.set_footer(text=CREATOR_FOOTER)
-
-    await interaction.response.send_message(embed=embed)
-
-    # ========== DEVOLVE MEDIADOR AO FINAL DA FILA ==========
-    if bet.mediator_id and bet.mediator_pix:
-        central_configured = db.is_mediator_central_configured(interaction.guild.id)
-        if central_configured:
-            success = db.add_mediator_to_end_of_central(interaction.guild.id, bet.mediator_id, bet.mediator_pix)
-            if success:
-                log(f"🔄 Mediador {bet.mediator_id} devolvido ao final da fila do central")
-                await update_mediator_central_panel(interaction.guild)
-            else:
-                log(f"⚠️ Não foi possível devolver mediador {bet.mediator_id} à fila (cheia ou central não configurado)")
-
-    db.finish_bet(bet)
-
-    import asyncio
-    await asyncio.sleep(10)
-    try:
-        if isinstance(interaction.channel, discord.Thread):
-            await interaction.channel.edit(archived=True, locked=True)
-    except Exception:
-        pass
-
-
 @bot.tree.command(name="motrar-fila", description="[MODERADOR] Alias para /mostrar-fila")
 @app_commands.describe(
     modo="Escolha o modo de jogo",
@@ -2882,10 +2947,8 @@ async def finalizar_aposta_2v2(interaction: discord.Interaction, time_vencedor: 
     moeda="Tipo de moeda da aposta (Dinheiro ou Sonhos)"
 )
 @app_commands.choices(modo=[
-    app_commands.Choice(name="1v1 Misto", value="1v1-misto"),
-    app_commands.Choice(name="1v1 Mob", value="1v1-mob"),
-    app_commands.Choice(name="2v2 Misto", value="2v2-misto"),
-    app_commands.Choice(name="2v2 Mob", value="2v2-mob"),
+    app_commands.Choice(name="Painel 1v1", value="1v1"),
+    app_commands.Choice(name="Painel 2v2", value="2v2"),
 ])
 @app_commands.choices(moeda=[
     app_commands.Choice(name="Dinheiro", value="reais"),
@@ -4064,6 +4127,8 @@ async def run_bot_with_token():
     # Adicionar views persistentes para bot2
     bot2.add_view(QueueButton(mode="", bet_value=0, mediator_fee=0, currency_type="sonhos"))
     bot2.add_view(TeamQueueButton(mode="2v2-misto", bet_value=0, mediator_fee=0, currency_type="sonhos"))
+    bot2.add_view(Unified1v1PanelView())
+    bot2.add_view(Unified2v2PanelView())
     bot2.add_view(ConfirmPaymentButton(bet_id=""))
     bot2.add_view(AcceptMediationButton(bet_id=""))
     
