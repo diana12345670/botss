@@ -1225,6 +1225,46 @@ class Unified2v2PanelView(discord.ui.View):
         except Exception as e:
             log(f"❌ Erro ao atualizar painel 2v2 unificado: {e}")
 
+    async def _join_team(self, interaction: discord.Interaction, mode: str, team_number: int):
+        meta = await self._load_panel(interaction)
+        if not meta:
+            await interaction.followup.send("⚠️ Dados do painel não encontrados. Recrie o painel.", ephemeral=True)
+            return
+
+        bet_value = float(meta['bet_value'])
+        mediator_fee = float(meta['mediator_fee'])
+        currency_type = meta.get('currency_type', 'sonhos')
+        message_id = interaction.message.id
+
+        base_qid = self._base_qid(mode, message_id)
+        team1_qid, team2_qid = self._team_qids(base_qid)
+
+        user_id = interaction.user.id
+        if db.is_user_in_active_bet(user_id):
+            await interaction.followup.send("Você já está em uma aposta ativa.", ephemeral=True)
+            return
+
+        await self._ensure_lock(base_qid)
+
+        async with queue_locks[base_qid]:
+            team1 = db.get_queue(team1_qid)
+            team2 = db.get_queue(team2_qid)
+
+            if user_id in team1 or user_id in team2:
+                await interaction.followup.send("Você já está nesta fila.", ephemeral=True)
+                return
+
+            target_team = team1 if team_number == 1 else team2
+            if len(target_team) >= 2:
+                await interaction.followup.send(f"Time {team_number} está cheio.", ephemeral=True)
+                return
+
+            db.add_to_queue(team1_qid if team_number == 1 else team2_qid, user_id)
+
+        await self._update_panel(interaction, bet_value, currency_type)
+        await interaction.followup.send(f"Você entrou no Time {team_number}.", ephemeral=True)
+        await self._try_create_bet_if_full(interaction, mode, base_qid, bet_value, mediator_fee, currency_type)
+
     async def _try_create_bet_if_full(self, interaction: discord.Interaction, mode: str, base_qid: str, bet_value: float, mediator_fee: float, currency_type: str):
         team1_qid, team2_qid = self._team_qids(base_qid)
         team1 = db.get_queue(team1_qid)
@@ -1248,23 +1288,44 @@ class Unified2v2PanelView(discord.ui.View):
             currency_type=currency_type,
         )
 
-    @discord.ui.button(label='📱 2v2 MOB – Time 1', style=discord.ButtonStyle.blurple, row=0, custom_id='persistent:panel_2v2_mob_t1')
-    async def join_2v2_mob_t1(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._join_team(interaction, "2v2-mob", 1)
+    @discord.ui.button(label='📱 2v2 MOB', style=discord.ButtonStyle.blurple, row=0, custom_id='persistent:panel_2v2_mob')
+    async def choose_2v2_mob(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message(
+            "Escolha o time para entrar em 2v2 MOB:",
+            ephemeral=True,
+            view=self._team_selector_view("2v2-mob")
+        )
 
-    @discord.ui.button(label='📱 2v2 MOB – Time 2', style=discord.ButtonStyle.blurple, row=0, custom_id='persistent:panel_2v2_mob_t2')
-    async def join_2v2_mob_t2(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._join_team(interaction, "2v2-mob", 2)
+    @discord.ui.button(label='💻 2v2 MISTO', style=discord.ButtonStyle.blurple, row=0, custom_id='persistent:panel_2v2_misto')
+    async def choose_2v2_misto(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message(
+            "Escolha o time para entrar em 2v2 MISTO:",
+            ephemeral=True,
+            view=self._team_selector_view("2v2-misto")
+        )
 
-    @discord.ui.button(label='💻 2v2 MISTO – Time 1', style=discord.ButtonStyle.blurple, row=1, custom_id='persistent:panel_2v2_misto_t1')
-    async def join_2v2_misto_t1(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._join_team(interaction, "2v2-misto", 1)
+    def _team_selector_view(self, mode: str) -> discord.ui.View:
+        parent = self
 
-    @discord.ui.button(label='💻 2v2 MISTO – Time 2', style=discord.ButtonStyle.blurple, row=1, custom_id='persistent:panel_2v2_misto_t2')
-    async def join_2v2_misto_t2(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._join_team(interaction, "2v2-misto", 2)
+        class TeamSelector(discord.ui.View):
+            def __init__(self):
+                super().__init__(timeout=60)
 
-    @discord.ui.button(label='🚪 Sair da fila', style=discord.ButtonStyle.gray, row=2, custom_id='persistent:panel_2v2_leave')
+            @discord.ui.button(label="Time 1", style=discord.ButtonStyle.blurple, row=0)
+            async def choose_team1(self, interaction: discord.Interaction, button: discord.ui.Button):
+                await interaction.response.defer(ephemeral=True)
+                await parent._join_team(interaction, mode, 1)
+                self.stop()
+
+            @discord.ui.button(label="Time 2", style=discord.ButtonStyle.blurple, row=0)
+            async def choose_team2(self, interaction: discord.Interaction, button: discord.ui.Button):
+                await interaction.response.defer(ephemeral=True)
+                await parent._join_team(interaction, mode, 2)
+                self.stop()
+
+        return TeamSelector()
+
+    @discord.ui.button(label='Sair da fila', style=discord.ButtonStyle.gray, row=1, custom_id='persistent:panel_2v2_leave')
     async def leave_panel_2v2(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         meta = await self._load_panel(interaction)
