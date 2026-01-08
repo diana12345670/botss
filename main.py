@@ -2489,7 +2489,7 @@ async def mostrar_fila(interaction: discord.Interaction, modo: app_commands.Choi
     view = Unified2v2PanelView() if panel_type == "2v2" else Unified1v1PanelView()
 
     db.save_panel_metadata(message.id, panel_type, valor_numerico, taxa_numerica, interaction.channel.id, currency_type)
-    log(f"Metadados do painel salvos: panel_type={panel_type}, bet_value={valor_numerico}, mediator_fee={taxa_numerica}, currency={currency_type}")
+    log(f"Metadados do painel salvos: panel_type={panel_type}, bet_value={valor_numerico}, mediator_fee={taxa_numerica}, currency={currency_type}, channel_id={interaction.channel.id}")
 
     # Agora edita a mensagem com os botões
     await message.edit(embed=embed, view=view)
