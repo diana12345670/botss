@@ -169,7 +169,7 @@ async def ensure_guild_authorized(guild: discord.Guild) -> bool:
                 name="📩 Para adicionar o bot:",
                 value=(
                     "Fale diretamente comigo — [Discord DM](https://discord.com/users/1339336477661724674)\n"
-                    "ou entre no meu servidor: https://discord.gg/yFhyc4RS5c"
+                    "ou entre no meu servidor: https://discord.com/invite/8M83fTdyRW"
                 ),
                 inline=False
             )
@@ -3939,7 +3939,7 @@ async def check_expired_subscriptions():
                             name="📩 Para renovar:",
                             value=(
                                 "Fale diretamente comigo — [Discord DM](https://discord.com/users/1339336477661724674)\n"
-                                "ou entre no meu servidor: https://discord.gg/yFhyc4RS5c"
+                                "ou entre no meu servidor: https://discord.com/invite/8M83fTdyRW"
                             ),
                             inline=False
                         )
