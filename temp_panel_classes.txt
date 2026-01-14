@@ -1,0 +1,332 @@
+class Unified3v3PanelView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    async def _load_panel(self, interaction: discord.Interaction) -> Optional[dict]:
+        try:
+            return db.get_panel_metadata(interaction.message.id)
+        except Exception:
+            return None
+
+    def _queue_ids(self, message_id: int) -> tuple[str, str]:
+        return f"3v3-mob_{message_id}", f"3v3-misto_{message_id}"
+
+    async def _ensure_lock(self, queue_id: str):
+        if queue_id not in queue_locks:
+            async with queue_locks_creation_lock:
+                if queue_id not in queue_locks:
+                    queue_locks[queue_id] = asyncio.Lock()
+
+    async def _update_panel(self, interaction: discord.Interaction, bet_value: float, currency_type: str):
+        mob_qid, misto_qid = self._queue_ids(interaction.message.id)
+        mob_queue = db.get_queue(mob_qid)
+        misto_queue = db.get_queue(misto_qid)
+
+        valor_formatado = format_bet_value(bet_value, currency_type)
+        guild_name = interaction.guild.name if interaction.guild else ""
+
+        embed_update = discord.Embed(
+            title=format_panel_title(guild_name, "3v3"),
+            color=EMBED_COLOR
+        )
+        embed_update.add_field(name="Valor", value=valor_formatado, inline=True)
+        embed_update.add_field(name="📱 3v3 MOB", value=f"{len(mob_queue)}/3 {render_team_mentions(mob_queue)}", inline=True)
+        embed_update.add_field(name="💻 3v3 MISTO", value=f"{len(misto_queue)}/3 {render_team_mentions(misto_queue)}", inline=True)
+        if interaction.guild and interaction.guild.icon:
+            embed_update.set_thumbnail(url=interaction.guild.icon.url)
+        embed_update.set_footer(text=f"{interaction.guild.name if interaction.guild else ''}", icon_url=interaction.guild.icon.url if interaction.guild and interaction.guild.icon else None)
+
+        try:
+            message = await interaction.channel.fetch_message(interaction.message.id)
+            await message.edit(embed=embed_update)
+        except Exception as e:
+            log(f"❌ Erro ao atualizar painel 3v3 unificado: {e}")
+
+    async def _try_create_bet_if_ready(self, interaction: discord.Interaction, mode: str, queue_id: str, bet_value: float, mediator_fee: float):
+        queue = db.get_queue(queue_id)
+        if len(queue) < 3:
+            return
+
+        player1_id = queue[0]
+        player2_id = queue[1]
+        player3_id = queue[2]
+
+        db.remove_from_queue(queue_id, player1_id)
+        db.remove_from_queue(queue_id, player2_id)
+        db.remove_from_queue(queue_id, player3_id)
+
+        meta = db.get_panel_metadata(interaction.message.id) or {}
+        currency_type = meta.get('currency_type', 'sonhos')
+        await self._update_panel(interaction, bet_value, currency_type)
+
+        await create_bet_channel(
+            interaction.guild,
+            mode,
+            player1_id,
+            player2_id,
+            float(bet_value),
+            float(mediator_fee),
+            interaction.channel_id,
+            currency_type=currency_type,
+            team1_ids=[player1_id, player2_id, player3_id],
+            team2_ids=[player1_id, player2_id, player3_id],
+        )
+
+    @discord.ui.button(label='📱 3v3 MOB', style=discord.ButtonStyle.red, row=0, custom_id='persistent:panel_3v3_mob')
+    async def join_3v3_mob(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        meta = await self._load_panel(interaction)
+        if not meta:
+            await interaction.followup.send("⚠️ Dados do painel não encontrados. Recrie o painel.", ephemeral=True)
+            return
+
+        user_id = interaction.user.id
+        if db.is_user_in_active_bet(user_id):
+            await interaction.followup.send("Você já está em uma aposta ativa.", ephemeral=True)
+            return
+
+        mob_qid, misto_qid = self._queue_ids(interaction.message.id)
+        await self._ensure_lock(mob_qid)
+
+        async with queue_locks[mob_qid]:
+            mob_queue = db.get_queue(mob_qid)
+            misto_queue = db.get_queue(misto_qid)
+            if user_id in mob_queue or user_id in misto_queue:
+                await interaction.followup.send("Você já está em uma fila deste painel.", ephemeral=True)
+                return
+            db.add_to_queue(mob_qid, user_id)
+
+        meta = db.get_panel_metadata(interaction.message.id) or {}
+        currency_type = meta.get('currency_type', 'sonhos')
+        await self._update_panel(interaction, float(meta['bet_value']), currency_type)
+        await interaction.followup.send("Você entrou na fila 📱 3v3 MOB.", ephemeral=True)
+        await self._try_create_bet_if_ready(interaction, "3v3-mob", mob_qid, float(meta['bet_value']), float(meta['mediator_fee']))
+
+    @discord.ui.button(label='💻 3v3 MISTO', style=discord.ButtonStyle.red, row=0, custom_id='persistent:panel_3v3_misto')
+    async def join_3v3_misto(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        meta = await self._load_panel(interaction)
+        if not meta:
+            await interaction.followup.send("⚠️ Dados do painel não encontrados. Recrie o painel.", ephemeral=True)
+            return
+
+        user_id = interaction.user.id
+        if db.is_user_in_active_bet(user_id):
+            await interaction.followup.send("Você já está em uma aposta ativa.", ephemeral=True)
+            return
+
+        mob_qid, misto_qid = self._queue_ids(interaction.message.id)
+        await self._ensure_lock(misto_qid)
+
+        async with queue_locks[misto_qid]:
+            mob_queue = db.get_queue(mob_qid)
+            misto_queue = db.get_queue(misto_qid)
+            if user_id in mob_queue or user_id in misto_queue:
+                await interaction.followup.send("Você já está em uma fila deste painel.", ephemeral=True)
+                return
+            db.add_to_queue(misto_qid, user_id)
+
+        meta = db.get_panel_metadata(interaction.message.id) or {}
+        currency_type = meta.get('currency_type', 'sonhos')
+        await self._update_panel(interaction, float(meta['bet_value']), currency_type)
+        await interaction.followup.send("Você entrou na fila 💻 3v3 MISTO.", ephemeral=True)
+        await self._try_create_bet_if_ready(interaction, "3v3-misto", misto_qid, float(meta['bet_value']), float(meta['mediator_fee']))
+
+    @discord.ui.button(label='Sair da Fila', style=discord.ButtonStyle.red, row=0, custom_id='persistent:panel_3v3_leave')
+    async def leave_panel_3v3(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        meta = await self._load_panel(interaction)
+        if not meta:
+            await interaction.followup.send("⚠️ Dados do painel não encontrados. Recrie o painel.", ephemeral=True)
+            return
+
+        user_id = interaction.user.id
+        mob_qid, misto_qid = self._queue_ids(interaction.message.id)
+
+        removed = False
+
+        await self._ensure_lock(mob_qid)
+        await self._ensure_lock(misto_qid)
+
+        async with queue_locks[mob_qid]:
+            if user_id in db.get_queue(mob_qid):
+                db.remove_from_queue(mob_qid, user_id)
+                removed = True
+
+        async with queue_locks[misto_qid]:
+            if user_id in db.get_queue(misto_qid):
+                db.remove_from_queue(misto_qid, user_id)
+                removed = True
+
+        meta = db.get_panel_metadata(interaction.message.id) or {}
+        currency_type = meta.get('currency_type', 'sonhos')
+        await self._update_panel(interaction, float(meta['bet_value']), currency_type)
+        await interaction.followup.send("Você saiu da fila." if removed else "Você não está em nenhuma fila deste painel.", ephemeral=True)
+
+
+class Unified4v4PanelView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    async def _load_panel(self, interaction: discord.Interaction) -> Optional[dict]:
+        try:
+            return db.get_panel_metadata(interaction.message.id)
+        except Exception:
+            return None
+
+    def _queue_ids(self, message_id: int) -> tuple[str, str]:
+        return f"4v4-mob_{message_id}", f"4v4-misto_{message_id}"
+
+    async def _ensure_lock(self, queue_id: str):
+        if queue_id not in queue_locks:
+            async with queue_locks_creation_lock:
+                if queue_id not in queue_locks:
+                    queue_locks[queue_id] = asyncio.Lock()
+
+    async def _update_panel(self, interaction: discord.Interaction, bet_value: float, currency_type: str):
+        mob_qid, misto_qid = self._queue_ids(interaction.message.id)
+        mob_queue = db.get_queue(mob_qid)
+        misto_queue = db.get_queue(misto_qid)
+
+        valor_formatado = format_bet_value(bet_value, currency_type)
+        guild_name = interaction.guild.name if interaction.guild else ""
+
+        embed_update = discord.Embed(
+            title=format_panel_title(guild_name, "4v4"),
+            color=EMBED_COLOR
+        )
+        embed_update.add_field(name="Valor", value=valor_formatado, inline=True)
+        embed_update.add_field(name="📱 4v4 MOB", value=f"{len(mob_queue)}/4 {render_team_mentions(mob_queue)}", inline=True)
+        embed_update.add_field(name="💻 4v4 MISTO", value=f"{len(misto_queue)}/4 {render_team_mentions(misto_queue)}", inline=True)
+        if interaction.guild and interaction.guild.icon:
+            embed_update.set_thumbnail(url=interaction.guild.icon.url)
+        embed_update.set_footer(text=f"{interaction.guild.name if interaction.guild else ''}", icon_url=interaction.guild.icon.url if interaction.guild and interaction.guild.icon else None)
+
+        try:
+            message = await interaction.channel.fetch_message(interaction.message.id)
+            await message.edit(embed=embed_update)
+        except Exception as e:
+            log(f"❌ Erro ao atualizar painel 4v4 unificado: {e}")
+
+    async def _try_create_bet_if_ready(self, interaction: discord.Interaction, mode: str, queue_id: str, bet_value: float, mediator_fee: float):
+        queue = db.get_queue(queue_id)
+        if len(queue) < 4:
+            return
+
+        player1_id = queue[0]
+        player2_id = queue[1]
+        player3_id = queue[2]
+        player4_id = queue[3]
+
+        db.remove_from_queue(queue_id, player1_id)
+        db.remove_from_queue(queue_id, player2_id)
+        db.remove_from_queue(queue_id, player3_id)
+        db.remove_from_queue(queue_id, player4_id)
+
+        meta = db.get_panel_metadata(interaction.message.id) or {}
+        currency_type = meta.get('currency_type', 'sonhos')
+        await self._update_panel(interaction, bet_value, currency_type)
+
+        await create_bet_channel(
+            interaction.guild,
+            mode,
+            player1_id,
+            player2_id,
+            float(bet_value),
+            float(mediator_fee),
+            interaction.channel_id,
+            currency_type=currency_type,
+            team1_ids=[player1_id, player2_id, player3_id, player4_id],
+            team2_ids=[player1_id, player2_id, player3_id, player4_id],
+        )
+
+    @discord.ui.button(label='📱 4v4 MOB', style=discord.ButtonStyle.red, row=0, custom_id='persistent:panel_4v4_mob')
+    async def join_4v4_mob(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        meta = await self._load_panel(interaction)
+        if not meta:
+            await interaction.followup.send("⚠️ Dados do painel não encontrados. Recrie o painel.", ephemeral=True)
+            return
+
+        user_id = interaction.user.id
+        if db.is_user_in_active_bet(user_id):
+            await interaction.followup.send("Você já está em uma aposta ativa.", ephemeral=True)
+            return
+
+        mob_qid, misto_qid = self._queue_ids(interaction.message.id)
+        await self._ensure_lock(mob_qid)
+
+        async with queue_locks[mob_qid]:
+            mob_queue = db.get_queue(mob_qid)
+            misto_queue = db.get_queue(misto_qid)
+            if user_id in mob_queue or user_id in misto_queue:
+                await interaction.followup.send("Você já está em uma fila deste painel.", ephemeral=True)
+                return
+            db.add_to_queue(mob_qid, user_id)
+
+        meta = db.get_panel_metadata(interaction.message.id) or {}
+        currency_type = meta.get('currency_type', 'sonhos')
+        await self._update_panel(interaction, float(meta['bet_value']), currency_type)
+        await interaction.followup.send("Você entrou na fila 📱 4v4 MOB.", ephemeral=True)
+        await self._try_create_bet_if_ready(interaction, "4v4-mob", mob_qid, float(meta['bet_value']), float(meta['mediator_fee']))
+
+    @discord.ui.button(label='💻 4v4 MISTO', style=discord.ButtonStyle.red, row=0, custom_id='persistent:panel_4v4_misto')
+    async def join_4v4_misto(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        meta = await self._load_panel(interaction)
+        if not meta:
+            await interaction.followup.send("⚠️ Dados do painel não encontrados. Recrie o painel.", ephemeral=True)
+            return
+
+        user_id = interaction.user.id
+        if db.is_user_in_active_bet(user_id):
+            await interaction.followup.send("Você já está em uma aposta ativa.", ephemeral=True)
+            return
+
+        mob_qid, misto_qid = self._queue_ids(interaction.message.id)
+        await self._ensure_lock(misto_qid)
+
+        async with queue_locks[misto_qid]:
+            mob_queue = db.get_queue(mob_qid)
+            misto_queue = db.get_queue(misto_qid)
+            if user_id in mob_queue or user_id in misto_queue:
+                await interaction.followup.send("Você já está em uma fila deste painel.", ephemeral=True)
+                return
+            db.add_to_queue(misto_qid, user_id)
+
+        meta = db.get_panel_metadata(interaction.message.id) or {}
+        currency_type = meta.get('currency_type', 'sonhos')
+        await self._update_panel(interaction, float(meta['bet_value']), currency_type)
+        await interaction.followup.send("Você entrou na fila 💻 4v4 MISTO.", ephemeral=True)
+        await self._try_create_bet_if_ready(interaction, "4v4-misto", misto_qid, float(meta['bet_value']), float(meta['mediator_fee']))
+
+    @discord.ui.button(label='Sair da Fila', style=discord.ButtonStyle.red, row=0, custom_id='persistent:panel_4v4_leave')
+    async def leave_panel_4v4(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        meta = await self._load_panel(interaction)
+        if not meta:
+            await interaction.followup.send("⚠️ Dados do painel não encontrados. Recrie o painel.", ephemeral=True)
+            return
+
+        user_id = interaction.user.id
+        mob_qid, misto_qid = self._queue_ids(interaction.message.id)
+
+        removed = False
+
+        await self._ensure_lock(mob_qid)
+        await self._ensure_lock(misto_qid)
+
+        async with queue_locks[mob_qid]:
+            if user_id in db.get_queue(mob_qid):
+                db.remove_from_queue(mob_qid, user_id)
+                removed = True
+
+        async with queue_locks[misto_qid]:
+            if user_id in db.get_queue(misto_qid):
+                db.remove_from_queue(misto_qid, user_id)
+                removed = True
+
+        meta = db.get_panel_metadata(interaction.message.id) or {}
+        currency_type = meta.get('currency_type', 'sonhos')
+        await self._update_panel(interaction, float(meta['bet_value']), currency_type)
+        await interaction.followup.send("Você saiu da fila." if removed else "Você não está em nenhuma fila deste painel.", ephemeral=True)

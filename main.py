@@ -1,4 +1,4 @@
-import os
+﻿import os
 import sys
 import discord
 from discord import app_commands
@@ -2457,8 +2457,8 @@ async def mostrar_fila(interaction: discord.Interaction, modo: app_commands.Choi
     # Defer a resposta para evitar timeout
     await interaction.response.defer()
 
-    # Envia a mensagem primeiro
-    message = await interaction.followup.send(embed=embed, wait=True)
+    # Envia a mensagem primeiro SEM botão (como preset-filas)
+    message = await interaction.channel.send(embed=embed)
 
     log(f"Mensagem da fila criada com ID: {message.id}")
 
@@ -2478,6 +2478,16 @@ async def mostrar_fila(interaction: discord.Interaction, modo: app_commands.Choi
     # Agora edita a mensagem com os botões
     await message.edit(embed=embed, view=view)
     log(f"Painel criado e pronto para uso: {mode} com moeda {currency_type}")
+
+    # Confirma criação
+    await interaction.followup.send(
+        f"✅ Painel criado com sucesso!\n"
+        f"Modo: {modo.name}\n"
+        f"Valor: {valor_formatado}\n"
+        f"Moeda: {moeda.name}\n"
+        f"Taxa: {taxa_str}",
+        ephemeral=True
+    )
 
 
 @bot.tree.command(name="preset-filas", description="[MODERADOR] Criar várias filas com valores pré-definidos")
@@ -3449,7 +3459,7 @@ async def setup(interaction: discord.Interaction, cargo: discord.Role, canal_de_
         embed.set_thumbnail(url=interaction.guild.icon.url)
     embed.set_footer(text=CREATOR_FOOTER)
 
-    await interaction.response.send_message(embed=embed)
+    await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 @bot.tree.command(name="central-apostado", description="[ADMIN] Criar painel do Central de Mediadores")
