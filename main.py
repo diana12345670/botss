@@ -15,14 +15,28 @@ from aiohttp import web
 import logging
 
 # Configurar logging para capturar TUDO (incluindo discord.py)
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s [%(levelname)s] %(message)s',
-    handlers=[
-        logging.StreamHandler(sys.stdout)
-    ],
-    force=True  # Força reconfiguração mesmo se já configurado
-)
+# Em produção, usa arquivo de log; em desenvolvimento, usa stdout
+if os.getenv('RAILWAY_ENVIRONMENT'):
+    # Produção (Railway) - usa arquivo de log
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s [%(levelname)s] %(message)s',
+        handlers=[
+            logging.FileHandler('/app/logs/bot.log'),
+            logging.StreamHandler(sys.stdout)
+        ],
+        force=True
+    )
+else:
+    # Desenvolvimento - usa stdout
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s [%(levelname)s] %(message)s',
+        handlers=[
+            logging.StreamHandler(sys.stdout)
+        ],
+        force=True
+    )
 
 # Desabilitar buffering do Python completamente
 sys.stdout.reconfigure(line_buffering=True)
