@@ -13,6 +13,74 @@ import logging
 
 logger = logging.getLogger('bot')
 
+# Translation dictionary for i18n support
+TRANSLATIONS = {
+    "pt": {
+        "setup_title": "Configuração Salva",
+        "setup_description": "Cargo de mediador definido como {cargo}",
+        "permissions_title": "Permissões",
+        "permissions_description": "Membros com o cargo {cargo} agora podem:\n• Aceitar mediação de apostas\n• Finalizar apostas\n• Cancelar apostas\n• Criar filas com `/mostrar-fila`",
+        "results_channel_title": "Canal de Resultados",
+        "results_channel_description": "Os resultados das apostas serão enviados em {channel}",
+        "language_title": "Idioma",
+        "language_description": "Idioma do bot definido como {language}",
+    },
+    "en": {
+        "setup_title": "Configuration Saved",
+        "setup_description": "Mediator role set to {cargo}",
+        "permissions_title": "Permissions",
+        "permissions_description": "Members with role {cargo} can now:\n• Accept bet mediations\n• Finish bets\n• Cancel bets\n• Create queues with `/mostrar-fila`",
+        "results_channel_title": "Results Channel",
+        "results_channel_description": "Bet results will be sent to {channel}",
+        "language_title": "Language",
+        "language_description": "Bot language set to {language}",
+    },
+    "fr": {
+        "setup_title": "Configuration Enregistrée",
+        "setup_description": "Rôle de médiateur défini comme {cargo}",
+        "permissions_title": "Permissions",
+        "permissions_description": "Les membres avec le rôle {cargo} peuvent maintenant:\n• Accepter les médiations de paris\n• Terminer les paris\n• Annuler les paris\n• Créer des files avec `/mostrar-fila`",
+        "results_channel_title": "Canal de Résultats",
+        "results_channel_description": "Les résultats des paris seront envoyés à {channel}",
+        "language_title": "Langue",
+        "language_description": "Langue du bot définie comme {language}",
+    },
+    "de": {
+        "setup_title": "Konfiguration Gespeichert",
+        "setup_description": "Mediator-Rolle gesetzt als {cargo}",
+        "permissions_title": "Berechtigungen",
+        "permissions_description": "Mitglieder mit Rolle {cargo} können jetzt:\n• Wett-Mediationen annehmen\n• Wetten beenden\n• Wetten abbrechen\n• Warteschlangen mit `/mostrar-fila` erstellen",
+        "results_channel_title": "Ergebniskanal",
+        "results_channel_description": "Wett-Ergebnisse werden an {channel} gesendet",
+        "language_title": "Sprache",
+        "language_description": "Bot-Sprache gesetzt als {language}",
+    },
+    "es": {
+        "setup_title": "Configuración Guardada",
+        "setup_description": "Rol de mediador definido como {cargo}",
+        "permissions_title": "Permisos",
+        "permissions_description": "Miembros con el rol {cargo} ahora pueden:\n• Aceptar mediaciones de apuestas\n• Finalizar apuestas\n• Cancelar apuestas\n• Crear filas con `/mostrar-fila`",
+        "results_channel_title": "Canal de Resultados",
+        "results_channel_description": "Los resultados de las apuestas serán enviados a {channel}",
+        "language_title": "Idioma",
+        "language_description": "Idioma del bot definido como {language}",
+    },
+    "zh": {
+        "setup_title": "配置已保存",
+        "setup_description": "调解员角色设置为 {cargo}",
+        "permissions_title": "权限",
+        "permissions_description": "拥有角色 {cargo} 的成员现在可以:\n• 接受投注调解\n• 完成投注\n• 取消投注\n• 使用 `/mostrar-fila` 创建队列",
+        "results_channel_title": "结果频道",
+        "results_channel_description": "投注结果将发送到 {channel}",
+        "language_title": "语言",
+        "language_description": "机器人语言设置为 {language}",
+    },
+}
+
+def get_translations(lang: str) -> dict:
+    """Get translations for a specific language"""
+    return TRANSLATIONS.get(lang, TRANSLATIONS["pt"])
+
 
 class HybridDatabase:
     """
@@ -119,6 +187,7 @@ class HybridDatabase:
             'active_bets': {},
             'bet_history': [],
             'mediator_roles': {},
+            'languages': {},
             'results_channels': {},
             'subscriptions': {}
         }
@@ -482,6 +551,27 @@ class HybridDatabase:
         """Retorna o ID do cargo de mediador configurado para o servidor"""
         data = self._load_data()
         return data.get('mediator_roles', {}).get(str(guild_id))
+
+    def set_guild_language(self, guild_id: int, language_code: str):
+        """Define o idioma preferido para um servidor"""
+        data = self._load_data()
+        if 'languages' not in data:
+            data['languages'] = {}
+        data['languages'][str(guild_id)] = language_code
+        self._save_data(data)
+
+    def set_language(self, guild_id: int, language_code: str):
+        """Define o idioma preferido para um servidor"""
+        data = self._load_data()
+        if 'languages' not in data:
+            data['languages'] = {}
+        data['languages'][str(guild_id)] = language_code
+        self._save_data(data)
+
+    def get_language(self, guild_id: int) -> str:
+        """Retorna o idioma configurado para o servidor (padrão: pt)"""
+        data = self._load_data()
+        return data.get('languages', {}).get(str(guild_id), 'pt')
 
     def set_results_channel(self, guild_id: int, channel_id: int):
         """Define o canal de resultados para um servidor"""

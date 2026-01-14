@@ -8,7 +8,7 @@ import asyncio
 from datetime import datetime
 from typing import Optional
 from models.bet import Bet
-from utils.database import Database
+from utils.database import HybridDatabase, get_translations
 from aiohttp import web
 
 # Forçar logs para stdout sem buffer (ESSENCIAL para Railway)
@@ -89,17 +89,35 @@ bot = commands.Bot(
     member_cache_flags=discord.MemberCacheFlags.none(),  # Sem cache de membros
     max_messages=10  # Cache ULTRA mínimo de mensagens (padrão é 1000)
 )
-db = Database()
+db = HybridDatabase()
 
 MODES = ["1v1-misto", "1v1-mob", "2v2-misto", "2v2-mob"]
 ACTIVE_BETS_CATEGORY = "Apostas Ativas"
-EMBED_COLOR = 0x5865F2
+EMBED_COLOR = 0xFF3030
 CREATOR_FOOTER = "StormBet - Bot feito por SKplay. Todos os direitos reservados | Criador: <@1339336477661724674>"
 CREATOR_ID = 1339336477661724674
 AUTO_AUTHORIZED_GUILD_ID = 1438184380395687978  # Servidor auto-autorizado
 
+MODE_LABELS = {
+    "1v1-mob": "1v1 MOB",
+    "1v1-misto": "1v1 MISTO",
+    "2v2-mob": "2v2 MOB",
+    "2v2-misto": "2v2 MISTO",
+}
+
 # Dicionário para mapear queue_id -> (channel_id, message_id, mode, bet_value)
 queue_messages = {}
+
+def format_mode_label(mode: str) -> str:
+    return MODE_LABELS.get(mode, mode.replace('-', ' ').title())
+
+def format_panel_title(guild_name: str, mode_label: str) -> str:
+    return f"{guild_name} | {mode_label}" if guild_name else mode_label
+
+def format_bet_value(bet_value: float, currency_type: str) -> str:
+    if currency_type == "sonhos":
+        return format_sonhos(bet_value)
+    return f"$ {bet_value:.2f}"
 
 def is_2v2_mode(mode: str) -> bool:
     return isinstance(mode, str) and mode.startswith("2v2")
@@ -114,8 +132,8 @@ def teams_full(mode: str, queue: list[int]) -> bool:
 
 def render_team_mentions(user_ids: list[int]) -> str:
     if not user_ids:
-        return "Vazio"
-    return "\n".join([f"<@{uid}>" for uid in user_ids])
+        return "—"
+    return ", ".join([f"<@{uid}>" for uid in user_ids])
 
 def queue_embed_fields_for_mode(mode: str, queue: list[int]) -> dict:
     if is_2v2_mode(mode):
@@ -125,7 +143,7 @@ def queue_embed_fields_for_mode(mode: str, queue: list[int]) -> dict:
             "team2": ("Time 2", f"{len(t2)}/2\n{render_team_mentions(t2)}"),
         }
     return {
-        "queue": ("Fila", render_team_mentions(queue) if queue else "Vazio")
+        "queue": ("Fila", render_team_mentions(queue) if queue else "—")
     }
 
 # Helper para verificar se usuário é o criador
@@ -398,28 +416,18 @@ class QueueButton(discord.ui.View):
 
             log(f"📊 Atualizando fila {queue_id}: {len(queue)} jogadores restantes")
 
-            # Usa menções diretas (sem fetch - mais rápido e econômico)
-            player_names = [f"<@{user_id}>" for user_id in queue]
-            players_text = "\n".join(player_names) if player_names else "Nenhum jogador na fila"
-
-            # Formata o valor baseado no tipo de moeda
-            if currency_type == "sonhos":
-                valor_formatado = format_sonhos(bet_value)
-                moeda_nome = "Sonhos"
-            else:
-                valor_formatado = f"$ {bet_value:.2f}"
-                moeda_nome = "Dinheiro"
+            valor_formatado = format_bet_value(bet_value, currency_type)
+            players_text = render_team_mentions(queue)
+            guild_name = channel.guild.name if getattr(channel, "guild", None) else ""
 
             embed_update = discord.Embed(
-                title=mode.replace('-', ' ').title(),
+                title=format_panel_title(guild_name, format_mode_label(mode)),
                 color=EMBED_COLOR
             )
             embed_update.add_field(name="Valor", value=valor_formatado, inline=True)
-            embed_update.add_field(name="Moeda", value=moeda_nome, inline=True)
-            embed_update.add_field(name="Fila", value=players_text if players_text != "Nenhum jogador na fila" else "Vazio", inline=False)
+            embed_update.add_field(name="Fila", value=f"{len(queue)}/2 {players_text}", inline=True)
             if guild_icon_url:
                 embed_update.set_thumbnail(url=guild_icon_url)
-            embed_update.set_footer(text=CREATOR_FOOTER)
 
             await message.edit(embed=embed_update)
             log(f"✅ Mensagem da fila {queue_id} editada com sucesso")
@@ -571,29 +579,17 @@ class QueueButton(discord.ui.View):
                     message = await interaction.channel.fetch_message(interaction.message.id)
 
                     # Monta a lista de jogadores restantes
-                    player_names = [f"<@{uid}>" for uid in updated_queue]
-                    players_text = "\n".join(player_names) if player_names else "Vazio"
-
-                    log(f"📝 Texto a ser exibido no painel: {players_text}")
-
-                    # Formata valor baseado no tipo de moeda
-                    if currency_type == "sonhos":
-                        valor_formatado = format_sonhos(bet_value)
-                        moeda_nome = "Sonhos"
-                    else:
-                        valor_formatado = f"$ {bet_value:.2f}"
-                        moeda_nome = "Dinheiro"
+                    players_text = render_team_mentions(updated_queue)
+                    valor_formatado = format_bet_value(bet_value, currency_type)
 
                     embed_update = discord.Embed(
-                        title=mode.replace('-', ' ').title(),
+                        title=format_panel_title(interaction.guild.name if interaction.guild else "", format_mode_label(mode)),
                         color=EMBED_COLOR
                     )
                     embed_update.add_field(name="Valor", value=valor_formatado, inline=True)
-                    embed_update.add_field(name="Moeda", value=moeda_nome, inline=True)
-                    embed_update.add_field(name="Fila", value=players_text, inline=False)
+                    embed_update.add_field(name="Fila", value=f"{len(updated_queue)}/2 {players_text}", inline=True)
                     if interaction.guild.icon:
                         embed_update.set_thumbnail(url=interaction.guild.icon.url)
-                    embed_update.set_footer(text=CREATOR_FOOTER)
 
                     await message.edit(embed=embed_update)
                     log(f"✅ Painel atualizado - jogadores removidos visualmente")
@@ -647,7 +643,6 @@ class QueueButton(discord.ui.View):
                 )
                 if interaction.guild.icon:
                     embed.set_thumbnail(url=interaction.guild.icon.url)
-                embed.set_footer(text=CREATOR_FOOTER)
 
                 await interaction.followup.send(embed=embed, ephemeral=True)
 
@@ -659,29 +654,17 @@ class QueueButton(discord.ui.View):
 
                     message = await interaction.channel.fetch_message(interaction.message.id)
 
-                    player_names = [f"<@{uid}>" for uid in queue]
-                    players_text = "\n".join(player_names) if player_names else "Vazio"
-
-                    log(f"📝 Texto a ser exibido no painel: {players_text}")
-
-                    # Formata valor baseado no tipo de moeda
-                    if currency_type == "sonhos":
-                        valor_formatado = format_sonhos(bet_value)
-                        moeda_nome = "Sonhos"
-                    else:
-                        valor_formatado = f"$ {bet_value:.2f}"
-                        moeda_nome = "Dinheiro"
+                    players_text = render_team_mentions(queue)
+                    valor_formatado = format_bet_value(bet_value, currency_type)
 
                     embed_update = discord.Embed(
-                        title=mode.replace('-', ' ').title(),
+                        title=format_panel_title(interaction.guild.name if interaction.guild else "", format_mode_label(mode)),
                         color=EMBED_COLOR
                     )
                     embed_update.add_field(name="Valor", value=valor_formatado, inline=True)
-                    embed_update.add_field(name="Moeda", value=moeda_nome, inline=True)
-                    embed_update.add_field(name="Fila", value=players_text, inline=False)
+                    embed_update.add_field(name="Fila", value=f"{len(queue)}/2 {players_text}", inline=True)
                     if interaction.guild.icon:
                         embed_update.set_thumbnail(url=interaction.guild.icon.url)
-                    embed_update.set_footer(text=CREATOR_FOOTER)
 
                     await message.edit(embed=embed_update)
                     log(f"✅ Painel atualizado com sucesso")
@@ -733,7 +716,6 @@ class QueueButton(discord.ui.View):
         )
         if interaction.guild.icon:
             embed.set_thumbnail(url=interaction.guild.icon.url)
-        embed.set_footer(text=CREATOR_FOOTER)
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
@@ -751,30 +733,17 @@ class QueueButton(discord.ui.View):
 
             message = await interaction.channel.fetch_message(interaction.message.id)
 
-            # Lista atualizada de jogadores
-            player_names = [f"<@{uid}>" for uid in queue_after]
-            players_text = "\n".join(player_names) if player_names else "Vazio"
-
-            log(f"📝 Atualizando painel após saída: {players_text}")
-
-            # Formata valor baseado no tipo de moeda
-            if currency_type == "sonhos":
-                valor_formatado = format_sonhos(bet_value)
-                moeda_nome = "Sonhos"
-            else:
-                valor_formatado = f"$ {bet_value:.2f}"
-                moeda_nome = "Dinheiro"
+            players_text = render_team_mentions(queue_after)
+            valor_formatado = format_bet_value(bet_value, currency_type)
 
             embed_update = discord.Embed(
-                title=mode.replace('-', ' ').title(),
+                title=format_panel_title(interaction.guild.name if interaction.guild else "", format_mode_label(mode)),
                 color=EMBED_COLOR
             )
             embed_update.add_field(name="Valor", value=valor_formatado, inline=True)
-            embed_update.add_field(name="Moeda", value=moeda_nome, inline=True)
-            embed_update.add_field(name="Fila", value=players_text, inline=False)
+            embed_update.add_field(name="Fila", value=f"{len(queue_after)}/2 {players_text}", inline=True)
             if interaction.guild.icon:
                 embed_update.set_thumbnail(url=interaction.guild.icon.url)
-            embed_update.set_footer(text=CREATOR_FOOTER)
 
             await message.edit(embed=embed_update)
             log(f"✅ Painel atualizado após saída")
@@ -807,24 +776,18 @@ class TeamQueueButton(discord.ui.View):
         team1 = db.get_queue(team1_qid)
         team2 = db.get_queue(team2_qid)
 
-        if currency_type == "sonhos":
-            valor_formatado = format_sonhos(bet_value)
-            moeda_nome = "Sonhos"
-        else:
-            valor_formatado = f"$ {bet_value:.2f}"
-            moeda_nome = "Dinheiro"
+        valor_formatado = format_bet_value(bet_value, currency_type)
+        guild_name = interaction.guild.name if interaction.guild else ""
 
         embed_update = discord.Embed(
-            title=mode.replace('-', ' ').title(),
+            title=format_panel_title(guild_name, format_mode_label(mode)),
             color=EMBED_COLOR
         )
         embed_update.add_field(name="Valor", value=valor_formatado, inline=True)
-        embed_update.add_field(name="Moeda", value=moeda_nome, inline=True)
-        embed_update.add_field(name="Time 1", value=f"{len(team1)}/2\n{render_team_mentions(team1)}", inline=True)
-        embed_update.add_field(name="Time 2", value=f"{len(team2)}/2\n{render_team_mentions(team2)}", inline=True)
+        embed_update.add_field(name="T1", value=f"{len(team1)}/2 {render_team_mentions(team1)}", inline=True)
+        embed_update.add_field(name="T2", value=f"{len(team2)}/2 {render_team_mentions(team2)}", inline=True)
         if interaction.guild.icon:
             embed_update.set_thumbnail(url=interaction.guild.icon.url)
-        embed_update.set_footer(text=CREATOR_FOOTER)
 
         try:
             message = await interaction.channel.fetch_message(interaction.message.id)
@@ -1007,21 +970,18 @@ class Unified1v1PanelView(discord.ui.View):
         mob_queue = db.get_queue(mob_qid)
         misto_queue = db.get_queue(misto_qid)
 
-        if currency_type == "sonhos":
-            valor_formatado = format_sonhos(bet_value)
-            moeda_nome = "Sonhos"
-        else:
-            valor_formatado = f"$ {bet_value:.2f}"
-            moeda_nome = "Dinheiro"
+        valor_formatado = format_bet_value(bet_value, currency_type)
+        guild_name = interaction.guild.name if interaction.guild else ""
 
-        embed_update = discord.Embed(title="Painel 1v1", color=EMBED_COLOR)
+        embed_update = discord.Embed(
+            title=format_panel_title(guild_name, "1v1"),
+            color=EMBED_COLOR
+        )
         embed_update.add_field(name="Valor", value=valor_formatado, inline=True)
-        embed_update.add_field(name="Moeda", value=moeda_nome, inline=True)
-        embed_update.add_field(name="📱 1v1 MOB", value=f"{len(mob_queue)}/2\n{render_team_mentions(mob_queue)}", inline=True)
-        embed_update.add_field(name="💻 1v1 MISTO", value=f"{len(misto_queue)}/2\n{render_team_mentions(misto_queue)}", inline=True)
+        embed_update.add_field(name="📱 1v1 MOB", value=f"{len(mob_queue)}/2 {render_team_mentions(mob_queue)}", inline=True)
+        embed_update.add_field(name="💻 1v1 MISTO", value=f"{len(misto_queue)}/2 {render_team_mentions(misto_queue)}", inline=True)
         if interaction.guild and interaction.guild.icon:
             embed_update.set_thumbnail(url=interaction.guild.icon.url)
-        embed_update.set_footer(text=CREATOR_FOOTER)
 
         try:
             message = await interaction.channel.fetch_message(interaction.message.id)
@@ -1042,7 +1002,7 @@ class Unified1v1PanelView(discord.ui.View):
 
         meta = db.get_panel_metadata(interaction.message.id) or {}
         currency_type = meta.get('currency_type', 'sonhos')
-        await self._update_panel(interaction, bet_value, currency_type, message_id_override=panel_message_id)
+        await self._update_panel(interaction, bet_value, currency_type)
 
         await create_bet_channel(
             interaction.guild,
@@ -2381,6 +2341,10 @@ def register_all_commands(target_bot):
 @app_commands.choices(modo=[
     app_commands.Choice(name="Painel 1v1", value="1v1"),
     app_commands.Choice(name="Painel 2v2", value="2v2"),
+    app_commands.Choice(name="1v1 MOB", value="1v1-mob"),
+    app_commands.Choice(name="1v1 MISTO", value="1v1-misto"),
+    app_commands.Choice(name="2v2 MOB", value="2v2-mob"),
+    app_commands.Choice(name="2v2 MISTO", value="2v2-misto"),
 ])
 @app_commands.choices(moeda=[
     app_commands.Choice(name="Dinheiro", value="reais"),
@@ -2407,7 +2371,7 @@ async def mostrar_fila(interaction: discord.Interaction, modo: app_commands.Choi
             )
         return
 
-    panel_type = modo.value
+    mode = modo.value
     currency_type = moeda.value
 
     # Converte o valor usando a função parse_value
@@ -2444,40 +2408,41 @@ async def mostrar_fila(interaction: discord.Interaction, modo: app_commands.Choi
         )
         return
 
-    # Formata o valor baseado no tipo de moeda
-    if currency_type == "sonhos":
-        valor_formatado = format_sonhos(valor_numerico)
-    else:
-        valor_formatado = f"$ {valor_numerico:.2f}"
+    valor_formatado = format_bet_value(valor_numerico, currency_type)
+    guild_name = interaction.guild.name if interaction.guild else ""
 
-    embed = discord.Embed(
-        title="Painel 2v2" if panel_type == "2v2" else "Painel 1v1",
-        color=EMBED_COLOR
-    )
+    # Decide view and embed based on mode
+    is_unified = mode in ("1v1", "2v2")
+    is_2v2 = mode.startswith("2v2")
 
-    embed.add_field(name="Valor", value=valor_formatado, inline=True)
-    embed.add_field(name="Moeda", value=moeda.name, inline=True)
-    if panel_type == "2v2":
-        embed.add_field(
-            name="📱 2v2 MOB",
-            value=(
-                f"T1 0/2\nT2 0/2"
-            ),
-            inline=True
-        )
-        embed.add_field(
-            name="💻 2v2 MISTO",
-            value=(
-                f"T1 0/2\nT2 0/2"
-            ),
-            inline=True
-        )
+    if is_unified:
+        # Unified panel (MOB + MISTO in same panel)
+        title = format_panel_title(guild_name, "1v1" if mode == "1v1" else "2v2")
+        embed = discord.Embed(title=title, color=EMBED_COLOR)
+        embed.add_field(name="Valor", value=valor_formatado, inline=True)
+        if mode == "1v1":
+            embed.add_field(name="📱 1v1 MOB", value="0/2 —", inline=True)
+            embed.add_field(name="💻 1v1 MISTO", value="0/2 —", inline=True)
+        else:
+            embed.add_field(name="📱 2v2 MOB", value="T1 0/2 —\nT2 0/2 —", inline=True)
+            embed.add_field(name="💻 2v2 MISTO", value="T1 0/2 —\nT2 0/2 —", inline=True)
+        view = Unified2v2PanelView() if mode == "2v2" else Unified1v1PanelView()
     else:
-        embed.add_field(name="📱 1v1 MOB", value="0/2\nVazio", inline=True)
-        embed.add_field(name="💻 1v1 MISTO", value="0/2\nVazio", inline=True)
+        # Individual panel (only MOB or only MISTO)
+        title = format_panel_title(guild_name, format_mode_label(mode))
+        embed = discord.Embed(title=title, color=EMBED_COLOR)
+        embed.add_field(name="Valor", value=valor_formatado, inline=True)
+        if is_2v2:
+            embed.add_field(name="T1", value="0/2 —", inline=True)
+            embed.add_field(name="T2", value="0/2 —", inline=True)
+            view = TeamQueueButton(mode, valor_numerico, taxa_numerica, None, currency_type)
+        else:
+            embed.add_field(name="Fila", value="0/2 —", inline=True)
+            view = QueueButton(mode, valor_numerico, taxa_numerica, None, currency_type)
+        db.save_queue_metadata(mode, valor_numerico, taxa_numerica, interaction.channel.id, None, currency_type)
+
     if interaction.guild.icon:
         embed.set_thumbnail(url=interaction.guild.icon.url)
-    embed.set_footer(text=CREATOR_FOOTER)
 
     # Defer a resposta para evitar timeout
     await interaction.response.defer()
@@ -2487,14 +2452,22 @@ async def mostrar_fila(interaction: discord.Interaction, modo: app_commands.Choi
 
     log(f"Mensagem da fila criada com ID: {message.id}")
 
-    view = Unified2v2PanelView() if panel_type == "2v2" else Unified1v1PanelView()
+    # Salva metadados após criar a mensagem
+    if is_unified:
+        db.save_panel_metadata(message.id, mode, valor_numerico, taxa_numerica, interaction.channel.id, currency_type)
+    else:
+        db.save_queue_metadata(mode, valor_numerico, taxa_numerica, interaction.channel.id, message.id, currency_type)
 
-    db.save_panel_metadata(message.id, panel_type, valor_numerico, taxa_numerica, interaction.channel.id, currency_type)
-    log(f"Metadados do painel salvos: panel_type={panel_type}, bet_value={valor_numerico}, mediator_fee={taxa_numerica}, currency={currency_type}, channel_id={interaction.channel.id}")
+    # Atualiza view com message.id correto
+    if not is_unified:
+        if is_2v2:
+            view.message_id = message.id
+        else:
+            view.message_id = message.id
 
     # Agora edita a mensagem com os botões
     await message.edit(embed=embed, view=view)
-    log(f"Painel criado e pronto para uso: {panel_type} com moeda {currency_type}")
+    log(f"Painel criado e pronto para uso: {mode} com moeda {currency_type}")
 
 
 @bot.tree.command(name="preset-filas", description="[MODERADOR] Criar várias filas com valores pré-definidos")
@@ -2507,6 +2480,10 @@ async def mostrar_fila(interaction: discord.Interaction, modo: app_commands.Choi
 @app_commands.choices(modo=[
     app_commands.Choice(name="Painel 1v1", value="1v1"),
     app_commands.Choice(name="Painel 2v2", value="2v2"),
+    app_commands.Choice(name="1v1 MOB", value="1v1-mob"),
+    app_commands.Choice(name="1v1 MISTO", value="1v1-misto"),
+    app_commands.Choice(name="2v2 MOB", value="2v2-mob"),
+    app_commands.Choice(name="2v2 MISTO", value="2v2-misto"),
 ])
 @app_commands.choices(moeda=[
     app_commands.Choice(name="Dinheiro", value="reais"),
@@ -2533,7 +2510,7 @@ async def preset_filas(interaction: discord.Interaction, modo: app_commands.Choi
             )
         return
 
-    panel_type = modo.value
+    mode = modo.value
     currency_type = moeda.value
 
     # Define valores preset baseado na moeda
@@ -2552,6 +2529,9 @@ async def preset_filas(interaction: discord.Interaction, modo: app_commands.Choi
 
     created_count = 0
     tasks = []
+    guild_name = interaction.guild.name if interaction.guild else ""
+    is_unified = mode in ("1v1", "2v2")
+    is_2v2 = mode.startswith("2v2")
 
     for valor_numerico in preset_values:
         try:
@@ -2578,49 +2558,53 @@ async def preset_filas(interaction: discord.Interaction, modo: app_commands.Choi
                 )
                 return
 
-            # Formata o valor baseado no tipo de moeda
-            if currency_type == "sonhos":
-                valor_formatado = format_sonhos(valor_numerico)
-            else:
-                valor_formatado = f"$ {valor_numerico:.2f}"
+            valor_formatado = format_bet_value(valor_numerico, currency_type)
 
-            embed = discord.Embed(
-                title="Painel 2v2" if panel_type == "2v2" else "Painel 1v1",
-                color=EMBED_COLOR
-            )
-
-            embed.add_field(name="Valor", value=valor_formatado, inline=True)
-            embed.add_field(name="Moeda", value=moeda.name, inline=True)
-            if panel_type == "2v2":
-                embed.add_field(
-                    name="📱 2v2 MOB",
-                    value=(
-                        f"T1 0/2\nT2 0/2"
-                    ),
-                    inline=True
-                )
-                embed.add_field(
-                    name="💻 2v2 MISTO",
-                    value=(
-                        f"T1 0/2\nT2 0/2"
-                    ),
-                    inline=True
-                )
+            if is_unified:
+                # Unified panel (MOB + MISTO in same panel)
+                title = format_panel_title(guild_name, "1v1" if mode == "1v1" else "2v2")
+                embed = discord.Embed(title=title, color=EMBED_COLOR)
+                embed.add_field(name="Valor", value=valor_formatado, inline=True)
+                if mode == "1v1":
+                    embed.add_field(name="📱 1v1 MOB", value="0/2 —", inline=True)
+                    embed.add_field(name="💻 1v1 MISTO", value="0/2 —", inline=True)
+                else:
+                    embed.add_field(name="📱 2v2 MOB", value="T1 0/2 —\nT2 0/2 —", inline=True)
+                    embed.add_field(name="💻 2v2 MISTO", value="T1 0/2 —\nT2 0/2 —", inline=True)
+                view = Unified2v2PanelView() if mode == "2v2" else Unified1v1PanelView()
             else:
-                embed.add_field(name="📱 1v1 MOB", value="0/2\nVazio", inline=True)
-                embed.add_field(name="💻 1v1 MISTO", value="0/2\nVazio", inline=True)
+                # Individual panel (only MOB or only MISTO)
+                title = format_panel_title(guild_name, format_mode_label(mode))
+                embed = discord.Embed(title=title, color=EMBED_COLOR)
+                embed.add_field(name="Valor", value=valor_formatado, inline=True)
+                if is_2v2:
+                    embed.add_field(name="T1", value="0/2 —", inline=True)
+                    embed.add_field(name="T2", value="0/2 —", inline=True)
+                    view = TeamQueueButton(mode, valor_numerico, taxa_numerica, None, currency_type)
+                else:
+                    embed.add_field(name="Fila", value="0/2 —", inline=True)
+                    view = QueueButton(mode, valor_numerico, taxa_numerica, None, currency_type)
+
             if interaction.guild.icon:
                 embed.set_thumbnail(url=interaction.guild.icon.url)
-            embed.set_footer(text=CREATOR_FOOTER)
 
             # Envia a mensagem primeiro SEM botão (mais rápido)
             message = await interaction.channel.send(embed=embed)
 
             log(f"📋 Fila preset criada: {valor_formatado} (ID: {message.id})")
 
-            view = Unified2v2PanelView() if panel_type == "2v2" else Unified1v1PanelView()
+            # Salva metadados após criar a mensagem
+            if is_unified:
+                db.save_panel_metadata(message.id, mode, valor_numerico, taxa_numerica, interaction.channel.id, currency_type)
+            else:
+                db.save_queue_metadata(mode, valor_numerico, taxa_numerica, interaction.channel.id, message.id, currency_type)
 
-            db.save_panel_metadata(message.id, panel_type, valor_numerico, taxa_numerica, interaction.channel.id, currency_type)
+            # Atualiza view com message.id correto
+            if not is_unified:
+                if is_2v2:
+                    view.message_id = message.id
+                else:
+                    view.message_id = message.id
 
             # Adiciona a tarefa de editar com botões à lista (será executado em batch)
             tasks.append((message, embed, view, valor_formatado))
@@ -3011,6 +2995,10 @@ async def create_bet_channel(guild: discord.Guild, mode: str, player1_id: int, p
 @app_commands.choices(modo=[
     app_commands.Choice(name="Painel 1v1", value="1v1"),
     app_commands.Choice(name="Painel 2v2", value="2v2"),
+    app_commands.Choice(name="1v1 MOB", value="1v1-mob"),
+    app_commands.Choice(name="1v1 MISTO", value="1v1-misto"),
+    app_commands.Choice(name="2v2 MOB", value="2v2-mob"),
+    app_commands.Choice(name="2v2 MISTO", value="2v2-misto"),
 ])
 @app_commands.choices(moeda=[
     app_commands.Choice(name="Dinheiro", value="reais"),
@@ -3280,12 +3268,21 @@ async def desbugar_filas(interaction: discord.Interaction):
     await interaction.followup.send(embed=embed, ephemeral=True)
 
 
-@bot.tree.command(name="setup", description="[ADMIN] Configurar cargo de mediador e canal de resultados")
+@bot.tree.command(name="setup", description="[ADMIN] Configurar cargo de mediador, canal de resultados e idioma")
 @app_commands.describe(
     cargo="Cargo que poderá mediar apostas",
-    canal_de_resultados="Canal onde os resultados das apostas serão enviados (opcional)"
+    canal_de_resultados="Canal onde os resultados das apostas serão enviados (opcional)",
+    idioma="Idioma do bot (Português, Inglês, Francês, Alemão, Espanhol, Chinês)"
 )
-async def setup(interaction: discord.Interaction, cargo: discord.Role, canal_de_resultados: discord.TextChannel = None):
+@app_commands.choices(idioma=[
+    app_commands.Choice(name="Português", value="pt"),
+    app_commands.Choice(name="English", value="en"),
+    app_commands.Choice(name="Français", value="fr"),
+    app_commands.Choice(name="Deutsch", value="de"),
+    app_commands.Choice(name="Español", value="es"),
+    app_commands.Choice(name="中文", value="zh"),
+])
+async def setup(interaction: discord.Interaction, cargo: discord.Role, canal_de_resultados: discord.TextChannel = None, idioma: app_commands.Choice[str] = None):
     # Apenas administradores podem usar este comando
     if not interaction.user.guild_permissions.administrator:
         await interaction.response.send_message(
@@ -3300,26 +3297,37 @@ async def setup(interaction: discord.Interaction, cargo: discord.Role, canal_de_
     # Salvar o canal de resultados se fornecido
     if canal_de_resultados:
         db.set_results_channel(interaction.guild.id, canal_de_resultados.id)
+    
+    # Salvar o idioma se fornecido
+    if idioma:
+        db.set_guild_language(interaction.guild.id, idioma.value)
+        
+    # Obter traduções
+    lang = idioma.value if idioma else "pt"
+    translations = get_translations(lang)
 
     embed = discord.Embed(
-        title="Configuração Salva",
-        description=f"Cargo de mediador definido como {cargo.mention}",
+        title=translations["setup_title"],
+        description=translations["setup_description"].format(cargo=cargo.mention),
         color=EMBED_COLOR
     )
     embed.add_field(
-        name="Permissões",
-        value=f"Membros com o cargo {cargo.mention} agora podem:\n"
-              "• Aceitar mediação de apostas\n"
-              "• Finalizar apostas\n"
-              "• Cancelar apostas\n"
-              "• Criar filas com `/mostrar-fila`",
+        name=translations["permissions_title"],
+        value=translations["permissions_description"].format(cargo=cargo.mention),
         inline=False
     )
 
     if canal_de_resultados:
         embed.add_field(
-            name="Canal de Resultados",
-            value=f"Os resultados das apostas serão enviados em {canal_de_resultados.mention}",
+            name=translations["results_channel_title"],
+            value=translations["results_channel_description"].format(channel=canal_de_resultados.mention),
+            inline=False
+        )
+    
+    if idioma:
+        embed.add_field(
+            name=translations["language_title"],
+            value=translations["language_description"].format(language=idioma.name),
             inline=False
         )
 
