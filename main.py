@@ -112,7 +112,11 @@ def format_mode_label(mode: str) -> str:
     return MODE_LABELS.get(mode, mode.replace('-', ' ').title())
 
 def format_panel_title(guild_name: str, mode_label: str) -> str:
-    return f"{guild_name} | {mode_label}" if guild_name else mode_label
+    if guild_name:
+        # Take only first 2 words of guild name
+        guild_short = " ".join(guild_name.split()[:2])
+        return f"{guild_short} | {mode_label}"
+    return mode_label
 
 def format_bet_value(bet_value: float, currency_type: str) -> str:
     if currency_type == "sonhos":
@@ -678,7 +682,7 @@ class QueueButton(discord.ui.View):
                     log(f"❌ Erro ao atualizar mensagem da fila: {e}")
                     logger.exception("Stacktrace:")
 
-    @discord.ui.button(label='Sair da Fila', style=discord.ButtonStyle.gray, row=0, custom_id='persistent:leave_queue')
+    @discord.ui.button(label='🚪 Sair da Fila', style=discord.ButtonStyle.gray, row=0, custom_id='persistent:leave_queue')
     async def leave_queue_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         user_id = interaction.user.id
         log(f"👆 Usuário {user_id} clicou em 'Sair da Fila' (mensagem {interaction.message.id})")
@@ -1075,7 +1079,7 @@ class Unified1v1PanelView(discord.ui.View):
         await interaction.followup.send("Você entrou na fila 💻 1v1 MISTO.", ephemeral=True)
         await self._try_create_bet_if_ready(interaction, "1v1-misto", misto_qid, float(meta['bet_value']), float(meta['mediator_fee']))
 
-    @discord.ui.button(label='🚪 Sair da fila', style=discord.ButtonStyle.gray, row=1, custom_id='persistent:panel_1v1_leave')
+    @discord.ui.button(label='Sair da Fila', style=discord.ButtonStyle.gray, row=0, custom_id='persistent:panel_1v1_leave')
     async def leave_panel_1v1(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         meta = await self._load_panel(interaction)
@@ -1286,7 +1290,7 @@ class Unified2v2PanelView(discord.ui.View):
 
         return TeamSelector()
 
-    @discord.ui.button(label='Sair da fila', style=discord.ButtonStyle.gray, row=1, custom_id='persistent:panel_2v2_leave')
+    @discord.ui.button(label='Sair da Fila', style=discord.ButtonStyle.gray, row=0, custom_id='persistent:panel_2v2_leave')
     async def leave_panel_2v2(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         meta = await self._load_panel(interaction)
@@ -2351,6 +2355,10 @@ def register_all_commands(target_bot):
     app_commands.Choice(name="Sonhos", value="sonhos"),
 ])
 async def mostrar_fila(interaction: discord.Interaction, modo: app_commands.Choice[str], valor: str, taxa: str, moeda: app_commands.Choice[str]):
+    # Obter idioma do servidor
+    lang = db.get_language(interaction.guild.id)
+    translations = get_translations(lang)
+    
     # Busca o cargo de mediador configurado
     mediator_role_id = db.get_mediator_role(interaction.guild.id)
 
@@ -2360,13 +2368,12 @@ async def mostrar_fila(interaction: discord.Interaction, modo: app_commands.Choi
     if not has_mediator_role:
         if mediator_role_id:
             await interaction.response.send_message(
-                f"Você precisa ter o cargo <@&{mediator_role_id}> para usar este comando.",
+                translations["need_mediator_role"].format(role=f"<@&{mediator_role_id}>"),
                 ephemeral=True
             )
         else:
             await interaction.response.send_message(
-                "Este servidor ainda não configurou um cargo de mediador.\n"
-                "Um administrador deve usar /setup @cargo para configurar.",
+                translations["no_mediator_role_configured"],
                 ephemeral=True
             )
         return
@@ -2379,7 +2386,7 @@ async def mostrar_fila(interaction: discord.Interaction, modo: app_commands.Choi
 
     if valor_numerico <= 0:
         await interaction.response.send_message(
-            "Valor inválido. Use valores positivos (exemplos: 50k, 1.5m, 2000).",
+            translations["invalid_value"],
             ephemeral=True
         )
         return
@@ -2393,7 +2400,7 @@ async def mostrar_fila(interaction: discord.Interaction, modo: app_commands.Choi
             taxa_numerica = (percentual / 100) * valor_numerico
         except ValueError:
             await interaction.response.send_message(
-                "Taxa inválida. Use valores como: 5%, 500, 1k",
+                translations["invalid_tax_percentage"],
                 ephemeral=True
             )
             return
@@ -2403,7 +2410,7 @@ async def mostrar_fila(interaction: discord.Interaction, modo: app_commands.Choi
 
     if taxa_numerica < 0:
         await interaction.response.send_message(
-            "Taxa inválida. Use valores não-negativos (exemplos: 5%, 500, 1k).",
+            translations["invalid_tax_negative"],
             ephemeral=True
         )
         return
@@ -2439,7 +2446,6 @@ async def mostrar_fila(interaction: discord.Interaction, modo: app_commands.Choi
         else:
             embed.add_field(name="Fila", value="0/2 —", inline=True)
             view = QueueButton(mode, valor_numerico, taxa_numerica, None, currency_type)
-        db.save_queue_metadata(None, mode, valor_numerico, taxa_numerica, interaction.channel.id, currency_type)
 
     if interaction.guild.icon:
         embed.set_thumbnail(url=interaction.guild.icon.url)

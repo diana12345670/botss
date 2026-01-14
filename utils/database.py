@@ -24,6 +24,11 @@ TRANSLATIONS = {
         "results_channel_description": "Os resultados das apostas serão enviados em {channel}",
         "language_title": "Idioma",
         "language_description": "Idioma do bot definido como {language}",
+        "need_mediator_role": "Você precisa ter o cargo {role} para usar este comando.",
+        "no_mediator_role_configured": "Este servidor ainda não configurou um cargo de mediador.\nUm administrador deve usar /setup @cargo para configurar.",
+        "invalid_value": "Valor inválido. Use valores positivos (exemplos: 50k, 1.5m, 2000).",
+        "invalid_tax_percentage": "Taxa inválida. Use valores como: 5%, 500, 1k",
+        "invalid_tax_negative": "Taxa inválida. Use valores não-negativos (exemplos: 5%, 500, 1k).",
     },
     "en": {
         "setup_title": "Configuration Saved",
@@ -34,6 +39,11 @@ TRANSLATIONS = {
         "results_channel_description": "Bet results will be sent to {channel}",
         "language_title": "Language",
         "language_description": "Bot language set to {language}",
+        "need_mediator_role": "You need the role {role} to use this command.",
+        "no_mediator_role_configured": "This server hasn't configured a mediator role yet.\nAn administrator must use /setup @role to configure it.",
+        "invalid_value": "Invalid value. Use positive values (examples: 50k, 1.5m, 2000).",
+        "invalid_tax_percentage": "Invalid tax. Use values like: 5%, 500, 1k",
+        "invalid_tax_negative": "Invalid tax. Use non-negative values (examples: 5%, 500, 1k).",
     },
     "fr": {
         "setup_title": "Configuration Enregistrée",
@@ -44,6 +54,11 @@ TRANSLATIONS = {
         "results_channel_description": "Les résultats des paris seront envoyés à {channel}",
         "language_title": "Langue",
         "language_description": "Langue du bot définie comme {language}",
+        "need_mediator_role": "Vous avez besoin du rôle {role} pour utiliser cette commande.",
+        "no_mediator_role_configured": "Ce serveur n'a pas encore configuré de rôle de médiateur.\nUn administrateur doit utiliser /setup @role pour le configurer.",
+        "invalid_value": "Valeur invalide. Utilisez des valeurs positives (exemples: 50k, 1.5m, 2000).",
+        "invalid_tax_percentage": "Taxe invalide. Utilisez des valeurs comme: 5%, 500, 1k",
+        "invalid_tax_negative": "Taxe invalide. Utilisez des valeurs non-négatives (exemples: 5%, 500, 1k).",
     },
     "de": {
         "setup_title": "Konfiguration Gespeichert",
@@ -54,6 +69,11 @@ TRANSLATIONS = {
         "results_channel_description": "Wett-Ergebnisse werden an {channel} gesendet",
         "language_title": "Sprache",
         "language_description": "Bot-Sprache gesetzt als {language}",
+        "need_mediator_role": "Sie benötigen die Rolle {role} um diesen Befehl zu verwenden.",
+        "no_mediator_role_configured": "Dieser Server hat noch keine Mediator-Rolle konfiguriert.\nEin Administrator muss /setup @role verwenden, um sie zu konfigurieren.",
+        "invalid_value": "Ungültiger Wert. Verwenden Sie positive Werte (Beispiele: 50k, 1.5m, 2000).",
+        "invalid_tax_percentage": "Ungültige Steuer. Verwenden Sie Werte wie: 5%, 500, 1k",
+        "invalid_tax_negative": "Ungültige Steuer. Verwenden Sie nicht-negative Werte (Beispiele: 5%, 500, 1k).",
     },
     "es": {
         "setup_title": "Configuración Guardada",
@@ -64,6 +84,11 @@ TRANSLATIONS = {
         "results_channel_description": "Los resultados de las apuestas serán enviados a {channel}",
         "language_title": "Idioma",
         "language_description": "Idioma del bot definido como {language}",
+        "need_mediator_role": "Necesitas el rol {role} para usar este comando.",
+        "no_mediator_role_configured": "Este servidor aún no ha configurado un rol de mediador.\nUn administrador debe usar /setup @rol para configurarlo.",
+        "invalid_value": "Valor inválido. Usa valores positivos (ejemplos: 50k, 1.5m, 2000).",
+        "invalid_tax_percentage": "Tasa inválida. Usa valores como: 5%, 500, 1k",
+        "invalid_tax_negative": "Tasa inválida. Usa valores no-negativos (ejemplos: 5%, 500, 1k).",
     },
     "zh": {
         "setup_title": "配置已保存",
@@ -74,6 +99,11 @@ TRANSLATIONS = {
         "results_channel_description": "投注结果将发送到 {channel}",
         "language_title": "语言",
         "language_description": "机器人语言设置为 {language}",
+        "need_mediator_role": "您需要角色 {role} 才能使用此命令。",
+        "no_mediator_role_configured": "此服务器尚未配置调解员角色。\n管理员必须使用 /setup @role 来配置它。",
+        "invalid_value": "无效值。使用正值（示例：50k, 1.5m, 2000）。",
+        "invalid_tax_percentage": "无效税率。使用如：5%, 500, 1k 的值",
+        "invalid_tax_negative": "无效税率。使用非负值（示例：5%, 500, 1k）。",
     },
 }
 
@@ -750,7 +780,7 @@ class HybridDatabase:
             return True
         return False
 
-    def create_subscription(self, guild_id: int, duration_seconds: int = None):
+    def create_subscription(self, guild_id: int, duration_seconds: Optional[int] = None):
         """Cria ou atualiza uma assinatura para um servidor
         
         IMPORTANTE: Sempre cria a nova assinatura ANTES de remover a antiga,
