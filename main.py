@@ -2452,6 +2452,7 @@ async def mostrar_fila(interaction: discord.Interaction, modo: app_commands.Choi
 
     if interaction.guild.icon:
         embed.set_thumbnail(url=interaction.guild.icon.url)
+    embed.set_footer(text=f"{interaction.guild.name if interaction.guild else ''}", icon_url=interaction.guild.icon.url if interaction.guild and interaction.guild.icon else None)
 
     # Defer a resposta para evitar timeout
     await interaction.response.defer()
@@ -2596,11 +2597,12 @@ async def preset_filas(interaction: discord.Interaction, modo: app_commands.Choi
 
             if interaction.guild.icon:
                 embed.set_thumbnail(url=interaction.guild.icon.url)
+            embed.set_footer(text=f"{interaction.guild.name if interaction.guild else ''}", icon_url=interaction.guild.icon.url if interaction.guild and interaction.guild.icon else None)
 
             # Envia a mensagem primeiro SEM botão (mais rápido)
             message = await interaction.channel.send(embed=embed)
 
-            log(f"📋 Fila preset criada: {valor_formatado} (ID: {message.id})")
+            log(f" Fila preset criada: {valor_formatado} (ID: {message.id})")
 
             # Salva metadados após criar a mensagem
             if is_unified:
@@ -3392,9 +3394,12 @@ async def desbugar_filas(interaction: discord.Interaction):
     app_commands.Choice(name="中文", value="zh"),
 ])
 async def setup(interaction: discord.Interaction, cargo: discord.Role, canal_de_resultados: discord.TextChannel = None, idioma: app_commands.Choice[str] = None):
+    # Defer para evitar timeout de 3 segundos
+    await interaction.response.defer(ephemeral=True)
+    
     # Apenas administradores podem usar este comando
     if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message(
+        await interaction.followup.send_message(
             "Apenas administradores podem usar este comando.",
             ephemeral=True
         )
