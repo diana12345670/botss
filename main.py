@@ -18,6 +18,8 @@ import logging
 # Em produção, usa arquivo de log; em desenvolvimento, usa stdout
 if os.getenv('RAILWAY_ENVIRONMENT'):
     # Produção (Railway) - usa arquivo de log
+    # Garante que o diretório de logs existe
+    os.makedirs('/app/logs', exist_ok=True)
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s [%(levelname)s] %(message)s',
