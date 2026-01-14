@@ -152,7 +152,7 @@ def teams_full(mode: str, queue: list[int]) -> bool:
 
 def render_team_mentions(user_ids: list[int]) -> str:
     if not user_ids:
-        return "—"
+        return "Vazio"
     return ", ".join([f"<@{uid}>" for uid in user_ids])
 
 def queue_embed_fields_for_mode(mode: str, queue: list[int]) -> dict:
@@ -163,13 +163,21 @@ def queue_embed_fields_for_mode(mode: str, queue: list[int]) -> dict:
             "team2": ("Time 2", f"{len(t2)}/2\n{render_team_mentions(t2)}"),
         }
     return {
-        "queue": ("Fila", render_team_mentions(queue) if queue else "—")
+        "queue": ("Fila", render_team_mentions(queue) if queue else "vazio")
     }
 
 # Helper para verificar se usuário é o criador
 def is_creator(user_id: int) -> bool:
     """Verifica se o usuário é o criador do bot"""
     return user_id == CREATOR_ID
+
+# Helper para verificar se usuário tem permissões de dono
+def is_owner(user_id: int) -> bool:
+    """Verifica se o usuário é o criador ou tem permissões de dono"""
+    return user_id == CREATOR_ID or user_id in AUTHORIZED_USERS
+
+# Lista de usuários autorizados a usar comandos de dono
+AUTHORIZED_USERS = []
 
 # Helper para verificar se servidor está autorizado
 async def ensure_guild_authorized(guild: discord.Guild) -> bool:
@@ -655,16 +663,8 @@ class QueueButton(discord.ui.View):
                     except:
                         pass
         else:
-                # Apenas entrou na fila (menos de 2 jogadores)
-                embed = discord.Embed(
-                    title="Entrou na fila",
-                    description=f"{mode.replace('-', ' ').title()} - {len(queue)}/2",
-                    color=EMBED_COLOR
-                )
-                if interaction.guild.icon:
-                    embed.set_thumbnail(url=interaction.guild.icon.url)
-
-                await interaction.followup.send(embed=embed, ephemeral=True)
+                # Apenas entrou na fila (menos de 2 jogadores) - sem mensagem
+                pass
 
                 # Atualiza a mensagem principal com os nomes REAIS dos jogadores
                 try:
@@ -730,14 +730,7 @@ class QueueButton(discord.ui.View):
         queue_after = db.get_queue(queue_id)
         log(f"📊 Fila {queue_id} após remover: {queue_after}")
 
-        embed = discord.Embed(
-            title="Saiu da fila",
-            color=EMBED_COLOR
-        )
-        if interaction.guild.icon:
-            embed.set_thumbnail(url=interaction.guild.icon.url)
-
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.response.send_message("Você saiu da fila.", ephemeral=True)
 
         # Atualiza a mensagem principal com a fila atualizada
         try:
@@ -894,7 +887,6 @@ class TeamQueueButton(discord.ui.View):
             db.add_to_queue(team1_qid, user_id)
 
         await self._update_panel(interaction, mode, bet_value, currency_type, queue_id)
-        await interaction.followup.send("Você entrou no Time 1.", ephemeral=True)
         await self._try_create_bet_if_full(interaction, mode, bet_value, mediator_fee, currency_type, queue_id)
 
     @discord.ui.button(label='Entrar no Time 2', style=discord.ButtonStyle.red, row=0, custom_id='persistent:join_team2')
@@ -935,7 +927,6 @@ class TeamQueueButton(discord.ui.View):
             db.add_to_queue(team2_qid, user_id)
 
         await self._update_panel(interaction, mode, bet_value, currency_type, queue_id)
-        await interaction.followup.send("Você entrou no Time 2.", ephemeral=True)
         await self._try_create_bet_if_full(interaction, mode, bet_value, mediator_fee, currency_type, queue_id)
 
     @discord.ui.button(label='Sair', style=discord.ButtonStyle.gray, row=0, custom_id='persistent:leave_team_queue')
@@ -965,7 +956,6 @@ class TeamQueueButton(discord.ui.View):
                 return
 
         await self._update_panel(interaction, mode, bet_value, currency_type, queue_id)
-        await interaction.followup.send("Você saiu da fila.", ephemeral=True)
 
 
 class Unified1v1PanelView(discord.ui.View):
@@ -1065,7 +1055,6 @@ class Unified1v1PanelView(discord.ui.View):
         meta = db.get_panel_metadata(interaction.message.id) or {}
         currency_type = meta.get('currency_type', 'sonhos')
         await self._update_panel(interaction, float(meta['bet_value']), currency_type)
-        await interaction.followup.send("Você entrou na fila 📱 1v1 MOB.", ephemeral=True)
         await self._try_create_bet_if_ready(interaction, "1v1-mob", mob_qid, float(meta['bet_value']), float(meta['mediator_fee']))
 
     @discord.ui.button(label='💻 1v1 MISTO', style=discord.ButtonStyle.red, row=0, custom_id='persistent:panel_1v1_misto')
@@ -1095,7 +1084,6 @@ class Unified1v1PanelView(discord.ui.View):
         meta = db.get_panel_metadata(interaction.message.id) or {}
         currency_type = meta.get('currency_type', 'sonhos')
         await self._update_panel(interaction, float(meta['bet_value']), currency_type)
-        await interaction.followup.send("Você entrou na fila 💻 1v1 MISTO.", ephemeral=True)
         await self._try_create_bet_if_ready(interaction, "1v1-misto", misto_qid, float(meta['bet_value']), float(meta['mediator_fee']))
 
     @discord.ui.button(label='Sair', style=discord.ButtonStyle.gray, row=0, custom_id='persistent:panel_1v1_leave')
@@ -1246,7 +1234,6 @@ class Unified2v2PanelView(discord.ui.View):
             db.add_to_queue(team1_qid if team_number == 1 else team2_qid, user_id)
 
         await self._update_panel(interaction, bet_value, currency_type, message_id_override=message_id)
-        await interaction.followup.send(f"Você entrou no Time {team_number}.", ephemeral=True)
         await self._try_create_bet_if_full(interaction, mode, base_qid, bet_value, mediator_fee, currency_type, panel_message_id=message_id)
 
     async def _try_create_bet_if_full(self, interaction: discord.Interaction, mode: str, base_qid: str, bet_value: float, mediator_fee: float, currency_type: str, panel_message_id: int):
@@ -3633,7 +3620,7 @@ async def ajuda(interaction: discord.Interaction):
 @bot.tree.command(name="servidores", description="[CRIADOR] Listar todos os servidores do bot")
 async def servidores(interaction: discord.Interaction):
     """Lista todos os servidores com ID e link de convite"""
-    if not is_creator(interaction.user.id):
+    if not is_owner(interaction.user.id):
         await interaction.response.send_message("❌ Apenas o criador do bot pode usar este comando.", ephemeral=True)
         return
 
@@ -3706,7 +3693,7 @@ async def criar_assinatura(
     duracao: str
 ):
     """Cria assinatura para um servidor (ex: 30d para 30 dias, 60s para 60 segundos)"""
-    if not is_creator(interaction.user.id):
+    if not is_owner(interaction.user.id):
         await interaction.response.send_message("❌ Apenas o criador do bot pode usar este comando.", ephemeral=True)
         return
 
@@ -3764,7 +3751,7 @@ async def assinatura_permanente(
     servidor_id: str
 ):
     """Cria assinatura permanente para um servidor"""
-    if not is_creator(interaction.user.id):
+    if not is_owner(interaction.user.id):
         await interaction.response.send_message("❌ Apenas o criador do bot pode usar este comando.", ephemeral=True)
         return
 
@@ -3795,7 +3782,7 @@ async def sair(
     servidor_id: str
 ):
     """Remove o bot de um servidor e cancela a assinatura"""
-    if not is_creator(interaction.user.id):
+    if not is_owner(interaction.user.id):
         await interaction.response.send_message("❌ Apenas o criador do bot pode usar este comando.", ephemeral=True)
         return
 
@@ -3846,7 +3833,7 @@ async def autorizar_servidor(
     duracao: str = None
 ):
     """Autoriza um servidor a usar o bot (apenas disponível no servidor auto-autorizado)"""
-    if not is_creator(interaction.user.id):
+    if not is_owner(interaction.user.id):
         await interaction.response.send_message("❌ Apenas o criador do bot pode usar este comando.", ephemeral=True)
         return
 
@@ -3923,7 +3910,7 @@ async def aviso_do_dev(
     mensagem: str
 ):
     """Envia uma mensagem em um canal específico"""
-    if not is_creator(interaction.user.id):
+    if not is_owner(interaction.user.id):
         await interaction.response.send_message("❌ Apenas o criador do bot pode usar este comando.", ephemeral=True)
         return
 
@@ -3965,7 +3952,7 @@ async def aviso_do_dev(
 @bot.tree.command(name="aviso-de-atualizacao", description="[CRIADOR] Avisar sobre atualização do bot em todos os servidores")
 async def aviso_de_atualizacao(interaction: discord.Interaction):
     """Envia aviso de atualização em todos os servidores"""
-    if not is_creator(interaction.user.id):
+    if not is_owner(interaction.user.id):
         await interaction.response.send_message("❌ Apenas o criador do bot pode usar este comando.", ephemeral=True)
         return
 
@@ -4054,6 +4041,141 @@ async def aviso_de_atualizacao(interaction: discord.Interaction):
 
     await interaction.followup.send(embed=result_embed, ephemeral=True)
     log(f"📢 Avisos de atualização enviados: {sent_count}/{len(bot.guilds)} servidores")
+
+
+@bot.tree.command(name="adicionar-permissao", description="[CRIADOR] Adicionar permissão de dono a um usuário")
+async def adicionar_permissao(
+    interaction: discord.Interaction,
+    usuario_id: str
+):
+    """Adiciona um usuário à lista de autorizados a usar comandos de dono"""
+    if not is_owner(interaction.user.id):
+        await interaction.response.send_message("❌ Apenas o criador do bot pode usar este comando.", ephemeral=True)
+        return
+
+    try:
+        user_id = int(usuario_id)
+    except ValueError:
+        await interaction.response.send_message("❌ ID de usuário inválido.", ephemeral=True)
+        return
+
+    if user_id in AUTHORIZED_USERS:
+        await interaction.response.send_message("⚠️ Este usuário já tem permissão de dono.", ephemeral=True)
+        return
+
+    AUTHORIZED_USERS.append(user_id)
+    
+    try:
+        user = await bot.fetch_user(user_id)
+        user_mention = user.mention if user else f"<@{user_id}>"
+    except:
+        user_mention = f"<@{user_id}>"
+
+    embed = discord.Embed(
+        title="✅ Permissão Concedida",
+        description=f"{user_mention} agora pode usar comandos de dono.",
+        color=0x00FF00
+    )
+    embed.add_field(name="ID do Usuário", value=f"`{user_id}`", inline=True)
+    embed.add_field(name="Total de Autorizados", value=str(len(AUTHORIZED_USERS) + 1), inline=True)  # +1 pelo criador
+    embed.set_footer(text=CREATOR_FOOTER)
+
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+    log(f"🔑 Permissão de dono concedida para {user_id} por {interaction.user.name}")
+
+
+@bot.tree.command(name="remover-permissao", description="[CRIADOR] Remover permissão de dono de um usuário")
+async def remover_permissao(
+    interaction: discord.Interaction,
+    usuario_id: str
+):
+    """Remove um usuário da lista de autorizados a usar comandos de dono"""
+    if not is_owner(interaction.user.id):
+        await interaction.response.send_message("❌ Apenas o criador do bot pode usar este comando.", ephemeral=True)
+        return
+
+    try:
+        user_id = int(usuario_id)
+    except ValueError:
+        await interaction.response.send_message("❌ ID de usuário inválido.", ephemeral=True)
+        return
+
+    if user_id not in AUTHORIZED_USERS:
+        await interaction.response.send_message("⚠️ Este usuário não tem permissão de dono.", ephemeral=True)
+        return
+
+    AUTHORIZED_USERS.remove(user_id)
+    
+    try:
+        user = await bot.fetch_user(user_id)
+        user_mention = user.mention if user else f"<@{user_id}>"
+    except:
+        user_mention = f"<@{user_id}>"
+
+    embed = discord.Embed(
+        title="🔒 Permissão Revogada",
+        description=f"{user_mention} não pode mais usar comandos de dono.",
+        color=0xFF0000
+    )
+    embed.add_field(name="ID do Usuário", value=f"`{user_id}`", inline=True)
+    embed.add_field(name="Total de Autorizados", value=str(len(AUTHORIZED_USERS) + 1), inline=True)  # +1 pelo criador
+    embed.set_footer(text=CREATOR_FOOTER)
+
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+    log(f"🔒 Permissão de dono revogada de {user_id} por {interaction.user.name}")
+
+
+@bot.tree.command(name="listar-autorizados", description="[CRIADOR] Listar usuários com permissão de dono")
+async def listar_autorizados(interaction: discord.Interaction):
+    """Lista todos os usuários com permissão de dono"""
+    if not is_owner(interaction.user.id):
+        await interaction.response.send_message("❌ Apenas o criador do bot pode usar este comando.", ephemeral=True)
+        return
+
+    embed = discord.Embed(
+        title="👑 Usuários com Permissão de Dono",
+        color=0x00FF00
+    )
+
+    # Adiciona o criador
+    try:
+        creator = await bot.fetch_user(CREATOR_ID)
+        embed.add_field(
+            name="👑 Criador", 
+            value=f"{creator.mention} (`{CREATOR_ID}`)", 
+            inline=False
+        )
+    except:
+        embed.add_field(
+            name="👑 Criador", 
+            value=f"<@{CREATOR_ID}> (`{CREATOR_ID}`)", 
+            inline=False
+        )
+
+    # Adiciona usuários autorizados
+    if AUTHORIZED_USERS:
+        authorized_list = []
+        for user_id in AUTHORIZED_USERS:
+            try:
+                user = await bot.fetch_user(user_id)
+                authorized_list.append(f"• {user.mention} (`{user_id}`)")
+            except:
+                authorized_list.append(f"• <@{user_id}> (`{user_id}`)")
+        
+        embed.add_field(
+            name="🔑 Autorizados", 
+            value="\n".join(authorized_list), 
+            inline=False
+        )
+    else:
+        embed.add_field(
+            name="🔑 Autorizados", 
+            value="Nenhum usuário autorizado além do criador.", 
+            inline=False
+        )
+
+    embed.set_footer(text=CREATOR_FOOTER)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 # ===== TASK PERIÓDICA PARA VERIFICAR ASSINATURAS =====
