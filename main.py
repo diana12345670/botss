@@ -1288,6 +1288,8 @@ class Unified2v2PanelView(discord.ui.View):
 
     def _team_selector_view(self, mode: str, panel_message_id: int) -> discord.ui.View:
         parent = self
+
+        class TeamSelector(discord.ui.View):
             def __init__(self):
                 super().__init__(timeout=60)
 
@@ -1304,6 +1306,7 @@ class Unified2v2PanelView(discord.ui.View):
                 self.stop()
 
         return TeamSelector()
+
     @discord.ui.button(label='Sair', style=discord.ButtonStyle.gray, row=0, custom_id='persistent:panel_2v2_leave')
     async def leave_panel_2v2(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
