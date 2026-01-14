@@ -93,7 +93,7 @@ db = HybridDatabase()
 
 MODES = ["1v1-misto", "1v1-mob", "2v2-misto", "2v2-mob"]
 ACTIVE_BETS_CATEGORY = "Apostas Ativas"
-EMBED_COLOR = 0xFF3030
+EMBED_COLOR = 0xFF0000  # Vermelho vibrante
 CREATOR_FOOTER = "StormBet - Bot feito por SKplay. Todos os direitos reservados | Criador: <@1339336477661724674>"
 CREATOR_ID = 1339336477661724674
 AUTO_AUTHORIZED_GUILD_ID = 1438184380395687978  # Servidor auto-autorizado
@@ -440,7 +440,7 @@ class QueueButton(discord.ui.View):
         except Exception as e:
             log(f"❌ Erro ao atualizar mensagem da fila: {e}")
 
-    @discord.ui.button(label='Entrar na Fila', style=discord.ButtonStyle.blurple, row=0, custom_id='persistent:join_queue')
+    @discord.ui.button(label='Entrar na Fila', style=discord.ButtonStyle.red, row=0, custom_id='persistent:join_queue')
     async def join_queue_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         user_id = interaction.user.id
         log(f"👆 Usuário {user_id} clicou em 'Entrar na Fila' (mensagem {interaction.message.id})")
@@ -682,7 +682,7 @@ class QueueButton(discord.ui.View):
                     log(f"❌ Erro ao atualizar mensagem da fila: {e}")
                     logger.exception("Stacktrace:")
 
-    @discord.ui.button(label='🚪 Sair da Fila', style=discord.ButtonStyle.gray, row=0, custom_id='persistent:leave_queue')
+    @discord.ui.button(label='Sair da Fila', style=discord.ButtonStyle.red, row=0, custom_id='persistent:leave_queue')
     async def leave_queue_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         user_id = interaction.user.id
         log(f"👆 Usuário {user_id} clicou em 'Sair da Fila' (mensagem {interaction.message.id})")
@@ -748,7 +748,7 @@ class QueueButton(discord.ui.View):
             embed_update.add_field(name="Fila", value=f"{len(queue_after)}/2 {players_text}", inline=True)
             if interaction.guild.icon:
                 embed_update.set_thumbnail(url=interaction.guild.icon.url)
-
+            embed_update.set_footer(text=f"{interaction.guild.name if interaction.guild else ''}", icon_url=interaction.guild.icon.url if interaction.guild and interaction.guild.icon else None)
             await message.edit(embed=embed_update)
             log(f"✅ Painel atualizado após saída")
         except discord.NotFound:
@@ -792,12 +792,14 @@ class TeamQueueButton(discord.ui.View):
         embed_update.add_field(name="T2", value=f"{len(team2)}/2 {render_team_mentions(team2)}", inline=True)
         if interaction.guild.icon:
             embed_update.set_thumbnail(url=interaction.guild.icon.url)
+        embed_update.set_footer(text=f"{interaction.guild.name if interaction.guild else ''}", icon_url=interaction.guild.icon.url if interaction.guild and interaction.guild.icon else None)
 
         try:
             message = await interaction.channel.fetch_message(interaction.message.id)
             await message.edit(embed=embed_update)
         except Exception as e:
-            log(f"❌ Erro ao atualizar painel 2v2: {e}")
+            log(f"❌ Erro ao atualizar painel: {e}")
+            logger.exception("Stacktrace:")
 
     async def _load_metadata(self, interaction: discord.Interaction) -> Optional[dict]:
         try:
@@ -838,7 +840,7 @@ class TeamQueueButton(discord.ui.View):
             currency_type=currency_type,
         )
 
-    @discord.ui.button(label='Entrar no Time 1', style=discord.ButtonStyle.blurple, row=0, custom_id='persistent:join_team1')
+    @discord.ui.button(label='Entrar no Time 1', style=discord.ButtonStyle.red, row=0, custom_id='persistent:join_team1')
     async def join_team1_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         metadata = await self._load_metadata(interaction)
@@ -879,7 +881,7 @@ class TeamQueueButton(discord.ui.View):
         await interaction.followup.send("Você entrou no Time 1.", ephemeral=True)
         await self._try_create_bet_if_full(interaction, mode, bet_value, mediator_fee, currency_type, queue_id)
 
-    @discord.ui.button(label='Entrar no Time 2', style=discord.ButtonStyle.blurple, row=0, custom_id='persistent:join_team2')
+    @discord.ui.button(label='Entrar no Time 2', style=discord.ButtonStyle.red, row=0, custom_id='persistent:join_team2')
     async def join_team2_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         metadata = await self._load_metadata(interaction)
@@ -920,7 +922,7 @@ class TeamQueueButton(discord.ui.View):
         await interaction.followup.send("Você entrou no Time 2.", ephemeral=True)
         await self._try_create_bet_if_full(interaction, mode, bet_value, mediator_fee, currency_type, queue_id)
 
-    @discord.ui.button(label='Sair', style=discord.ButtonStyle.gray, row=0, custom_id='persistent:leave_team_queue')
+    @discord.ui.button(label='Sair', style=discord.ButtonStyle.red, row=0, custom_id='persistent:leave_team_queue')
     async def leave_team_queue_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         metadata = await self._load_metadata(interaction)
@@ -986,6 +988,7 @@ class Unified1v1PanelView(discord.ui.View):
         embed_update.add_field(name="💻 1v1 MISTO", value=f"{len(misto_queue)}/2 {render_team_mentions(misto_queue)}", inline=True)
         if interaction.guild and interaction.guild.icon:
             embed_update.set_thumbnail(url=interaction.guild.icon.url)
+        embed_update.set_footer(text=f"{interaction.guild.name if interaction.guild else ''}", icon_url=interaction.guild.icon.url if interaction.guild and interaction.guild.icon else None)
 
         try:
             message = await interaction.channel.fetch_message(interaction.message.id)
@@ -1019,7 +1022,7 @@ class Unified1v1PanelView(discord.ui.View):
             currency_type=currency_type,
         )
 
-    @discord.ui.button(label='📱 1v1 MOB', style=discord.ButtonStyle.blurple, row=0, custom_id='persistent:panel_1v1_mob')
+    @discord.ui.button(label='📱 1v1 MOB', style=discord.ButtonStyle.red, row=0, custom_id='persistent:panel_1v1_mob')
     async def join_1v1_mob(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         meta = await self._load_panel(interaction)
@@ -1049,7 +1052,7 @@ class Unified1v1PanelView(discord.ui.View):
         await interaction.followup.send("Você entrou na fila 📱 1v1 MOB.", ephemeral=True)
         await self._try_create_bet_if_ready(interaction, "1v1-mob", mob_qid, float(meta['bet_value']), float(meta['mediator_fee']))
 
-    @discord.ui.button(label='💻 1v1 MISTO', style=discord.ButtonStyle.blurple, row=0, custom_id='persistent:panel_1v1_misto')
+    @discord.ui.button(label='💻 1v1 MISTO', style=discord.ButtonStyle.red, row=0, custom_id='persistent:panel_1v1_misto')
     async def join_1v1_misto(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         meta = await self._load_panel(interaction)
@@ -1079,7 +1082,7 @@ class Unified1v1PanelView(discord.ui.View):
         await interaction.followup.send("Você entrou na fila 💻 1v1 MISTO.", ephemeral=True)
         await self._try_create_bet_if_ready(interaction, "1v1-misto", misto_qid, float(meta['bet_value']), float(meta['mediator_fee']))
 
-    @discord.ui.button(label='Sair da Fila', style=discord.ButtonStyle.gray, row=0, custom_id='persistent:panel_1v1_leave')
+    @discord.ui.button(label='Sair da Fila', style=discord.ButtonStyle.red, row=0, custom_id='persistent:panel_1v1_leave')
     async def leave_panel_1v1(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         meta = await self._load_panel(interaction)
@@ -1181,7 +1184,7 @@ class Unified2v2PanelView(discord.ui.View):
         )
         if interaction.guild and interaction.guild.icon:
             embed_update.set_thumbnail(url=interaction.guild.icon.url)
-        embed_update.set_footer(text=CREATOR_FOOTER)
+        embed_update.set_footer(text=f"{interaction.guild.name if interaction.guild else ''}", icon_url=interaction.guild.icon.url if interaction.guild and interaction.guild.icon else None)
 
         try:
             message = await interaction.channel.fetch_message(message_id)
@@ -1253,7 +1256,7 @@ class Unified2v2PanelView(discord.ui.View):
             currency_type=currency_type,
         )
 
-    @discord.ui.button(label='📱 2v2 MOB', style=discord.ButtonStyle.blurple, row=0, custom_id='persistent:panel_2v2_mob')
+    @discord.ui.button(label='📱 2v2 MOB', style=discord.ButtonStyle.red, row=0, custom_id='persistent:panel_2v2_mob')
     async def choose_2v2_mob(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_message(
             "Escolha o time para entrar em 2v2 MOB:",
@@ -1261,7 +1264,7 @@ class Unified2v2PanelView(discord.ui.View):
             view=self._team_selector_view("2v2-mob", interaction.message.id)
         )
 
-    @discord.ui.button(label='💻 2v2 MISTO', style=discord.ButtonStyle.blurple, row=0, custom_id='persistent:panel_2v2_misto')
+    @discord.ui.button(label='💻 2v2 MISTO', style=discord.ButtonStyle.red, row=0, custom_id='persistent:panel_2v2_misto')
     async def choose_2v2_misto(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_message(
             "Escolha o time para entrar em 2v2 MISTO:",
@@ -1276,13 +1279,13 @@ class Unified2v2PanelView(discord.ui.View):
             def __init__(self):
                 super().__init__(timeout=60)
 
-            @discord.ui.button(label="Time 1", style=discord.ButtonStyle.blurple, row=0)
+            @discord.ui.button(label="Time 1", style=discord.ButtonStyle.red, row=0)
             async def choose_team1(self, interaction: discord.Interaction, button: discord.ui.Button):
                 await interaction.response.defer(ephemeral=True)
                 await parent._join_team(interaction, mode, 1, message_id_override=panel_message_id)
                 self.stop()
 
-            @discord.ui.button(label="Time 2", style=discord.ButtonStyle.blurple, row=0)
+            @discord.ui.button(label="Time 2", style=discord.ButtonStyle.red, row=0)
             async def choose_team2(self, interaction: discord.Interaction, button: discord.ui.Button):
                 await interaction.response.defer(ephemeral=True)
                 await parent._join_team(interaction, mode, 2, message_id_override=panel_message_id)
@@ -1290,7 +1293,7 @@ class Unified2v2PanelView(discord.ui.View):
 
         return TeamSelector()
 
-    @discord.ui.button(label='Sair da Fila', style=discord.ButtonStyle.gray, row=0, custom_id='persistent:panel_2v2_leave')
+    @discord.ui.button(label='Sair da Fila', style=discord.ButtonStyle.red, row=0, custom_id='persistent:panel_2v2_leave')
     async def leave_panel_2v2(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         meta = await self._load_panel(interaction)
@@ -3255,6 +3258,105 @@ async def desbugar_filas(interaction: discord.Interaction):
 
     log(f"✅ Filas limpas (metadados preservados para reuso dos painéis)")
 
+    # ATUALIZAR TODOS OS PAINÉIS para mostrar que as filas estão vazias
+    updated_panels = 0
+    for message_id_str, metadata in all_metadata.items():
+        try:
+            message_id = int(message_id_str)
+            channel_id = metadata['channel_id']
+            
+            channel = bot.get_channel(channel_id)
+            if not channel:
+                continue
+                
+            message = await channel.fetch_message(message_id)
+            
+            # Verifica tipo de painel e atualiza accordingly
+            if metadata.get('type') == 'panel':
+                panel_type = metadata.get('panel_type')
+                bet_value = metadata['bet_value']
+                currency_type = metadata.get('currency_type', 'sonhos')
+                
+                if panel_type == '1v1':
+                    # Atualizar painel 1v1 unificado
+                    mob_qid = f"1v1-mob_{message_id}"
+                    misto_qid = f"1v1-misto_{message_id}"
+                    mob_queue = []  # Fila vazia após limpeza
+                    misto_queue = []  # Fila vazia após limpeza
+                    
+                    valor_formatado = format_bet_value(bet_value, currency_type)
+                    guild_name = channel.guild.name if channel.guild else ""
+                    
+                    embed_update = discord.Embed(
+                        title=format_panel_title(guild_name, "1v1"),
+                        color=EMBED_COLOR
+                    )
+                    embed_update.add_field(name="Valor", value=valor_formatado, inline=True)
+                    embed_update.add_field(name="📱 1v1 MOB", value="0/2 —", inline=True)
+                    embed_update.add_field(name="💻 1v1 MISTO", value="0/2 —", inline=True)
+                    if channel.guild and channel.guild.icon:
+                        embed_update.set_thumbnail(url=channel.guild.icon.url)
+                    embed_update.set_footer(text=f"{channel.guild.name if channel.guild else ''}", icon_url=channel.guild.icon.url if channel.guild and channel.guild.icon else None)
+                    
+                    await message.edit(embed=embed_update)
+                    updated_panels += 1
+                    
+                elif panel_type == '2v2':
+                    # Atualizar painel 2v2 unificado
+                    embed_update = discord.Embed(title="Painel 2v2", color=EMBED_COLOR)
+                    
+                    valor_formatado = format_bet_value(bet_value, currency_type)
+                    moeda_nome = "Sonhos" if currency_type == "sonhos" else "Dinheiro"
+                    
+                    embed_update.add_field(name="Valor", value=valor_formatado, inline=True)
+                    embed_update.add_field(name="Moeda", value=moeda_nome, inline=True)
+                    embed_update.add_field(name="📱 2v2 MOB", value="T1 0/2\n—\nT2 0/2\n—", inline=True)
+                    embed_update.add_field(name="💻 2v2 MISTO", value="T1 0/2\n—\nT2 0/2\n—", inline=True)
+                    if channel.guild and channel.guild.icon:
+                        embed_update.set_thumbnail(url=channel.guild.icon.url)
+                    embed_update.set_footer(text=CREATOR_FOOTER)
+                    
+                    await message.edit(embed=embed_update)
+                    updated_panels += 1
+            else:
+                # Painel individual (modo específico)
+                mode = metadata['mode']
+                bet_value = metadata['bet_value']
+                currency_type = metadata.get('currency_type', 'sonhos')
+                queue_id = metadata['queue_id']
+                
+                # Fila vazia após limpeza
+                queue = []
+                
+                valor_formatado = format_bet_value(bet_value, currency_type)
+                guild_name = channel.guild.name if channel.guild else ""
+                
+                embed_update = discord.Embed(
+                    title=format_panel_title(guild_name, format_mode_label(mode)),
+                    color=EMBED_COLOR
+                )
+                embed_update.add_field(name="Valor", value=valor_formatado, inline=True)
+                
+                if is_2v2_mode(mode):
+                    # Para 2v2, mostrar times vazios
+                    embed_update.add_field(name="Time 1", value="0/2 —", inline=True)
+                    embed_update.add_field(name="Time 2", value="0/2 —", inline=True)
+                else:
+                    # Para 1v1, mostrar fila vazia
+                    embed_update.add_field(name="Fila", value="0/2 —", inline=True)
+                
+                if channel.guild and channel.guild.icon:
+                    embed_update.set_thumbnail(url=channel.guild.icon.url)
+                
+                await message.edit(embed=embed_update)
+                updated_panels += 1
+                
+        except Exception as e:
+            log(f"⚠️ Erro ao atualizar painel {message_id_str}: {e}")
+            continue
+    
+    log(f"✅ {updated_panels} painéis atualizados após limpeza")
+
     # Limpar dicionário em memória
     queue_messages.clear()
 
@@ -3266,7 +3368,8 @@ async def desbugar_filas(interaction: discord.Interaction):
     embed.add_field(name="Apostas Canceladas", value=str(cancelled_bets), inline=True)
     embed.add_field(name="Canais Deletados", value=str(deleted_channels), inline=True)
     embed.add_field(name="Filas Limpas", value="Todas (jogadores removidos)", inline=True)
-    embed.add_field(name="Painéis", value="Preservados para reuso ♻️", inline=True)
+    embed.add_field(name="Painéis Atualizados", value=f"{updated_panels} painéis ♻️", inline=True)
+    embed.add_field(name="Painéis", value="Preservados para reuso", inline=True)
     if interaction.guild.icon:
         embed.set_thumbnail(url=interaction.guild.icon.url)
     embed.set_footer(text=f"{CREATOR_FOOTER} | Executado por {interaction.user.name}")
