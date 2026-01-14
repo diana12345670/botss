@@ -440,7 +440,7 @@ class QueueButton(discord.ui.View):
         except Exception as e:
             log(f"❌ Erro ao atualizar mensagem da fila: {e}")
 
-    @discord.ui.button(label='Entrar na Fila', style=discord.ButtonStyle.red, row=0, custom_id='persistent:join_queue')
+    @discord.ui.button(label='Entrar', style=discord.ButtonStyle.red, row=0, custom_id='persistent:join_queue')
     async def join_queue_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         user_id = interaction.user.id
         log(f"👆 Usuário {user_id} clicou em 'Entrar na Fila' (mensagem {interaction.message.id})")
@@ -682,7 +682,7 @@ class QueueButton(discord.ui.View):
                     log(f"❌ Erro ao atualizar mensagem da fila: {e}")
                     logger.exception("Stacktrace:")
 
-    @discord.ui.button(label='Sair da Fila', style=discord.ButtonStyle.red, row=0, custom_id='persistent:leave_queue')
+    @discord.ui.button(label='Sair', style=discord.ButtonStyle.gray, row=0, custom_id='persistent:leave_queue')
     async def leave_queue_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         user_id = interaction.user.id
         log(f"👆 Usuário {user_id} clicou em 'Sair da Fila' (mensagem {interaction.message.id})")
@@ -922,7 +922,7 @@ class TeamQueueButton(discord.ui.View):
         await interaction.followup.send("Você entrou no Time 2.", ephemeral=True)
         await self._try_create_bet_if_full(interaction, mode, bet_value, mediator_fee, currency_type, queue_id)
 
-    @discord.ui.button(label='Sair', style=discord.ButtonStyle.red, row=0, custom_id='persistent:leave_team_queue')
+    @discord.ui.button(label='Sair', style=discord.ButtonStyle.gray, row=0, custom_id='persistent:leave_team_queue')
     async def leave_team_queue_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         metadata = await self._load_metadata(interaction)
@@ -1082,7 +1082,7 @@ class Unified1v1PanelView(discord.ui.View):
         await interaction.followup.send("Você entrou na fila 💻 1v1 MISTO.", ephemeral=True)
         await self._try_create_bet_if_ready(interaction, "1v1-misto", misto_qid, float(meta['bet_value']), float(meta['mediator_fee']))
 
-    @discord.ui.button(label='Sair da Fila', style=discord.ButtonStyle.red, row=0, custom_id='persistent:panel_1v1_leave')
+    @discord.ui.button(label='Sair', style=discord.ButtonStyle.gray, row=0, custom_id='persistent:panel_1v1_leave')
     async def leave_panel_1v1(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         meta = await self._load_panel(interaction)
@@ -1274,8 +1274,6 @@ class Unified2v2PanelView(discord.ui.View):
 
     def _team_selector_view(self, mode: str, panel_message_id: int) -> discord.ui.View:
         parent = self
-
-        class TeamSelector(discord.ui.View):
             def __init__(self):
                 super().__init__(timeout=60)
 
@@ -1292,8 +1290,7 @@ class Unified2v2PanelView(discord.ui.View):
                 self.stop()
 
         return TeamSelector()
-
-    @discord.ui.button(label='Sair da Fila', style=discord.ButtonStyle.red, row=0, custom_id='persistent:panel_2v2_leave')
+    @discord.ui.button(label='Sair', style=discord.ButtonStyle.gray, row=0, custom_id='persistent:panel_2v2_leave')
     async def leave_panel_2v2(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         meta = await self._load_panel(interaction)
@@ -2480,7 +2477,7 @@ async def mostrar_fila(interaction: discord.Interaction, modo: app_commands.Choi
     log(f"Painel criado e pronto para uso: {mode} com moeda {currency_type}")
 
     # Confirma criação
-    await interaction.followup.send(
+    confirmation_msg = await interaction.followup.send(
         f"✅ Painel criado com sucesso!\n"
         f"Modo: {modo.name}\n"
         f"Valor: {valor_formatado}\n"
@@ -2488,7 +2485,12 @@ async def mostrar_fila(interaction: discord.Interaction, modo: app_commands.Choi
         f"Taxa: {taxa_str}",
         ephemeral=True
     )
-
+    
+    # Auto-deleta a mensagem imediatamente
+    try:
+        await confirmation_msg.delete()
+    except:
+        pass  # Mensagem já pode ter sido deletada
 
 @bot.tree.command(name="preset-filas", description="[MODERADOR] Criar várias filas com valores pré-definidos")
 
@@ -2645,13 +2647,19 @@ async def preset_filas(interaction: discord.Interaction, modo: app_commands.Choi
             log(f"❌ Erro ao adicionar botão em {valor_formatado}: {e}")
 
     # Confirma criação
-    await interaction.followup.send(
+    confirmation_msg = await interaction.followup.send(
         f"✅ {created_count} filas criadas com sucesso!\n"
         f"Modo: {modo.name}\n"
         f"Moeda: {moeda.name}\n"
         f"Taxa: {taxa_str}",
         ephemeral=True
     )
+    
+    # Auto-deleta a mensagem imediatamente
+    try:
+        await confirmation_msg.delete()
+    except:
+        pass  # Mensagem já pode ter sido deletada
 
     log(f"✅ Preset de filas concluído: {created_count} filas criadas")
 
