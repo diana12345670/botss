@@ -2439,7 +2439,7 @@ async def mostrar_fila(interaction: discord.Interaction, modo: app_commands.Choi
         else:
             embed.add_field(name="Fila", value="0/2 —", inline=True)
             view = QueueButton(mode, valor_numerico, taxa_numerica, None, currency_type)
-        db.save_queue_metadata(mode, valor_numerico, taxa_numerica, interaction.channel.id, None, currency_type)
+        db.save_queue_metadata(None, mode, valor_numerico, taxa_numerica, interaction.channel.id, currency_type)
 
     if interaction.guild.icon:
         embed.set_thumbnail(url=interaction.guild.icon.url)
@@ -2456,7 +2456,7 @@ async def mostrar_fila(interaction: discord.Interaction, modo: app_commands.Choi
     if is_unified:
         db.save_panel_metadata(message.id, mode, valor_numerico, taxa_numerica, interaction.channel.id, currency_type)
     else:
-        db.save_queue_metadata(mode, valor_numerico, taxa_numerica, interaction.channel.id, message.id, currency_type)
+        db.save_queue_metadata(message.id, mode, valor_numerico, taxa_numerica, interaction.channel.id, currency_type)
 
     # Atualiza view com message.id correto
     if not is_unified:
@@ -2597,7 +2597,7 @@ async def preset_filas(interaction: discord.Interaction, modo: app_commands.Choi
             if is_unified:
                 db.save_panel_metadata(message.id, mode, valor_numerico, taxa_numerica, interaction.channel.id, currency_type)
             else:
-                db.save_queue_metadata(mode, valor_numerico, taxa_numerica, interaction.channel.id, message.id, currency_type)
+                db.save_queue_metadata(message.id, mode, valor_numerico, taxa_numerica, interaction.channel.id, currency_type)
 
             # Atualiza view com message.id correto
             if not is_unified:
