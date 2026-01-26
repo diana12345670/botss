@@ -820,10 +820,10 @@ class HybridDatabase:
         return data['queue_metadata']
 
     def save_panel_metadata(self, message_id: int, panel_type: str, bet_value: float, mediator_fee: float, channel_id: int, currency_type: str = "sonhos"):
-        """Salva metadados de um painel unificado (1v1 ou 2v2)."""
+        """Salva metadados de um painel unificado (1v1, 2v2, 3v3 ou 4v4)."""
         if not isinstance(message_id, int) or message_id <= 0:
             raise ValueError(f"message_id deve ser um inteiro positivo, recebido: {message_id}")
-        if panel_type not in ("1v1", "2v2"):
+        if panel_type not in ("1v1", "2v2", "3v3", "4v4"):
             raise ValueError(f"panel_type inválido: {panel_type}")
 
         try:

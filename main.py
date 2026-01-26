@@ -2155,10 +2155,10 @@ async def cleanup_expired_queues():
                         if channel:
                             message = await channel.fetch_message(message_id)
 
-                            # Verifica se é 2v2 ou 1v1
-                            is_2v2 = "2v2" in mode
+                            # Verifica se é 2v2, 3v3, 4v4 ou 1v1
+                            is_team_based_mode = "2v2" in mode or "3v3" in mode or "4v4" in mode
 
-                            if is_2v2:
+                            if is_team_based_mode:
                                 team1_queue = db.get_queue(f"{queue_id}_team1")
                                 team2_queue = db.get_queue(f"{queue_id}_team2")
 
@@ -2253,6 +2253,30 @@ async def on_message_delete(message):
                 elif panel_type == '2v2':
                     mob_base = f"2v2-mob_{message.id}"
                     misto_base = f"2v2-misto_{message.id}"
+                    qids = [
+                        f"{mob_base}_team1", f"{mob_base}_team2",
+                        f"{misto_base}_team1", f"{misto_base}_team2",
+                    ]
+                    for qid in qids:
+                        if qid in data.get('queues', {}):
+                            data['queues'][qid] = []
+                        if qid in data.get('queue_timestamps', {}):
+                            data['queue_timestamps'][qid] = {}
+                elif panel_type == '3v3':
+                    mob_base = f"3v3-mob_{message.id}"
+                    misto_base = f"3v3-misto_{message.id}"
+                    qids = [
+                        f"{mob_base}_team1", f"{mob_base}_team2",
+                        f"{misto_base}_team1", f"{misto_base}_team2",
+                    ]
+                    for qid in qids:
+                        if qid in data.get('queues', {}):
+                            data['queues'][qid] = []
+                        if qid in data.get('queue_timestamps', {}):
+                            data['queue_timestamps'][qid] = {}
+                elif panel_type == '4v4':
+                    mob_base = f"4v4-mob_{message.id}"
+                    misto_base = f"4v4-misto_{message.id}"
                     qids = [
                         f"{mob_base}_team1", f"{mob_base}_team2",
                         f"{misto_base}_team1", f"{misto_base}_team2",
