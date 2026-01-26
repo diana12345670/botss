@@ -1853,6 +1853,121 @@ class Unified4v4PanelView(discord.ui.View):
         await interaction.followup.send("Você saiu da fila." if removed else "Você não está em nenhuma fila deste painel.", ephemeral=True)
 
 
+class ConfirmPaymentButton(discord.ui.View):
+    """View para confirmar pagamento de aposta"""
+    def __init__(self, bet_id: str):
+        super().__init__(timeout=None)
+        self.bet_id = bet_id
+
+    @discord.ui.button(label="✅ Confirmar Pagamento", style=discord.ButtonStyle.green, custom_id="confirm_payment")
+    async def confirm_payment(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Lógica para confirmar pagamento da aposta
+        await interaction.response.send_message("Pagamento confirmado!", ephemeral=True)
+
+
+class AcceptMediationButton(discord.ui.View):
+    """View para aceitar mediação de aposta"""
+    def __init__(self, bet_id: str):
+        super().__init__(timeout=None)
+        self.bet_id = bet_id
+
+    @discord.ui.button(label="✅ Aceitar Mediação", style=discord.ButtonStyle.green, custom_id="accept_mediation")
+    async def accept_mediation(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Lógica para aceitar mediação da aposta
+        await interaction.response.send_message("Mediação aceita!", ephemeral=True)
+
+
+class MediatorCentralView(discord.ui.View):
+    """View para o Central de Mediadores"""
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label='Aguardar Aposta', style=discord.ButtonStyle.green, custom_id='persistent:mediator_central_join', emoji='⏳')
+    async def join_central_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        user_id = interaction.user.id
+        guild_id = interaction.guild.id
+        
+        log(f"👆 Mediador {user_id} clicou em 'Aguardar Aposta' no central")
+        
+        # Verifica se tem cargo de mediador
+        mediator_role_id = db.get_mediator_role(guild_id)
+        has_mediator_role = mediator_role_id and discord.utils.get(interaction.user.roles, id=mediator_role_id) is not None
+        
+        if not has_mediator_role:
+            if mediator_role_id:
+                await interaction.response.send_message(
+                    f"Você precisa ter o cargo <@&{mediator_role_id}> para entrar no central.",
+                    ephemeral=True
+                )
+            else:
+                await interaction.response.send_message(
+                    "Este servidor ainda não configurou um cargo de mediador.\n"
+                    "Um administrador deve usar /setup @cargo para configurar.",
+                    ephemeral=True
+                )
+            return
+        
+        # Verifica se já está no central
+        if db.is_mediator_in_central(guild_id, user_id):
+            await interaction.response.send_message(
+                "Você já está no Central de Mediadores aguardando apostas.",
+                ephemeral=True
+            )
+            return
+        
+        # Verifica se já tem PIX salvo
+        saved_pix = db.get_mediator_pix(user_id)
+        
+        if saved_pix:
+            # PIX já salvo - entra direto
+            success = db.add_mediator_to_central(guild_id, user_id, saved_pix)
+            
+            if not success:
+                await interaction.response.send_message(
+                    "O Central de Mediadores está cheio (10 vagas). Tente novamente mais tarde.",
+                    ephemeral=True
+                )
+                return
+            
+            # Atualiza o painel
+            await update_mediator_central_panel(interaction.guild)
+            
+            await interaction.response.send_message(
+                f"Você entrou no Central de Mediadores!\n"
+                f"Usando seu PIX salvo: `{saved_pix}`\n"
+                f"Você será atribuído automaticamente quando uma aposta começar.\n"
+                f"**Atenção:** Você será removido após 2 horas sem apostas.",
+                ephemeral=True
+            )
+            log(f"✅ Mediador {user_id} entrou no central (PIX já salvo)")
+        else:
+            # Precisa informar PIX - abre modal
+            await interaction.response.send_modal(MediatorCentralPixModal(guild_id))
+
+    @discord.ui.button(label='Sair do Central', style=discord.ButtonStyle.gray, custom_id='persistent:mediator_central_leave', emoji='🚪')
+    async def leave_central_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        user_id = interaction.user.id
+        guild_id = interaction.guild.id
+        
+        if not db.is_mediator_in_central(guild_id, user_id):
+            await interaction.response.send_message(
+                "Você não está no Central de Mediadores.",
+                ephemeral=True
+            )
+            return
+        
+        db.remove_mediator_from_central(guild_id, user_id)
+        
+        # Atualiza o painel
+        await update_mediator_central_panel(interaction.guild)
+        
+        await interaction.response.send_message(
+            "Você saiu do Central de Mediadores.",
+            ephemeral=True
+        )
+        log(f"🚪 Mediador {user_id} saiu do central do guild {guild_id}")
+
+
 async def update_mediator_central_panel(guild: discord.Guild):
     """Atualiza o painel do central de mediadores com a lista atual"""
     config = db.get_mediator_central_config(guild.id)
