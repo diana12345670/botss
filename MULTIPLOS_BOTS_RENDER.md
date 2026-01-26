@@ -1,23 +1,26 @@
 # Como Rodar Múltiplos Bots no Render
 
-## 🎯 Suporte para 2 Tokens
+## 🎯 Suporte para 5 Tokens
 
-Este bot agora **suporta rodar 2 tokens no mesmo processo**!
+Este bot agora **suporta rodar 5 tokens no mesmo processo**!
 
-Para rodar 2 bots, você tem duas opções:
+Para rodar 5 bots, você tem duas opções:
 
-### ✅ Opção 1: 2 Tokens no Mesmo Deployment (NOVO!)
+### ✅ Opção 1: Até 5 Tokens no Mesmo Deployment (NOVO!)
 
-Agora você pode rodar 2 bots Discord no mesmo Web Service:
+Agora você pode rodar até 5 bots Discord no mesmo Web Service:
 
 1. **Configure as variáveis de ambiente:**
    - `TOKEN_1` = Token do primeiro bot
-   - `TOKEN_2` = Token do segundo bot
+   - `TOKEN_2` = Token do segundo bot (opcional)
+   - `TOKEN_3` = Token do terceiro bot (opcional)
+   - `TOKEN_4` = Token do quarto bot (opcional)
+   - `TOKEN_5` = Token do quinto bot (opcional)
    - `DATABASE_URL` = URL do PostgreSQL (opcional, mas recomendado)
 
 2. **Deploy!**
-   - O bot detecta automaticamente os 2 tokens
-   - Ambos rodam em paralelo no mesmo processo
+   - O bot detecta automaticamente os tokens disponíveis
+   - Todos rodam em paralelo no mesmo processo
    - Compartilham o mesmo database
 
 **Vantagens:**
@@ -26,8 +29,9 @@ Agora você pode rodar 2 bots Discord no mesmo Web Service:
 - ✅ Fácil de configurar
 
 **Desvantagens:**
-- ⚠️ Se o processo cair, ambos os bots caem juntos
-- ⚠️ Limitado a 2 tokens apenas
+- ⚠️ Se o processo cair, todos os bots caem juntos
+- ⚠️ Limitado a 5 tokens apenas
+- ⚠️ Maior consumo de memória
 
 ### ✅ Opção 2: Múltiplos Web Services (Para 3+ bots)
 
@@ -113,12 +117,12 @@ Para confirmar que está funcionando:
 
 **Prioridade de detecção:**
 1. Se existe `TOKEN` ou `DISCORD_TOKEN`: usa apenas esse (1 bot)
-2. Se existe `TOKEN_1` e `TOKEN_2`: roda 2 bots em paralelo
+2. Se existe `TOKEN_1` a `TOKEN_5`: roda bots em paralelo
 3. Se existe apenas `TOKEN_1`: usa esse (1 bot)
 
 **Limitações:**
-- ✅ Suporte para **até 2 tokens** no mesmo processo
-- ❌ Não suporta `TOKEN_3`, `TOKEN_4`, `TOKEN_5` (para isso use múltiplos Web Services)
+- ✅ Suporte para **até 5 tokens** no mesmo processo
+- ❌ Não suporta mais de 5 tokens (para isso use múltiplos Web Services)
 
 ## 🔍 Como Verificar se Está Funcionando
 
@@ -128,11 +132,14 @@ Para confirmar que está funcionando:
 ✅ BOT CONECTADO AO DISCORD!
 ```
 
-**Com 2 tokens:**
+**Com múltiplos tokens (2-5):**
 ```
-🤖 Detectados 2 tokens - iniciando 2 bots em paralelo...
-📋 Copiando comandos para segundo bot...
+🤖 Detectados X tokens (TOKEN_1 a TOKEN_X) - iniciando X bots em paralelo...
+📋 Criada instância do bot #2
+📋 Registrando comandos no bot #2...
+✅ Comandos registrados no bot #2
 🤖 Bot #1: Conectando ao Discord...
 🤖 Bot #2: Conectando ao Discord...
-✅ BOT CONECTADO AO DISCORD! (aparece 2x)
+✅ BOT #1 CONECTADO AO DISCORD!
+✅ BOT #2 CONECTADO AO DISCORD!
 ```

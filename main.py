@@ -107,7 +107,7 @@ bot = commands.Bot(
 )
 db = HybridDatabase()
 
-MODES = ["1v1-misto", "1v1-mob", "2v2-misto", "2v2-mob"]
+MODES = ["1v1-misto", "1v1-mob", "2v2-misto", "2v2-mob", "3v3-misto", "3v3-mob", "4v4-misto", "4v4-mob"]
 ACTIVE_BETS_CATEGORY = "Apostas Ativas"
 EMBED_COLOR = 0xFF0000  # Vermelho vibrante
 CREATOR_FOOTER = "StormBet - Bot feito por SKplay. Todos os direitos reservados | Criador: <@1339336477661724674>"
@@ -119,6 +119,10 @@ MODE_LABELS = {
     "1v1-misto": "1v1 MISTO",
     "2v2-mob": "2v2 MOB",
     "2v2-misto": "2v2 MISTO",
+    "3v3-mob": "3v3 MOB",
+    "3v3-misto": "3v3 MISTO",
+    "4v4-mob": "4v4 MOB",
+    "4v4-misto": "4v4 MISTO",
 }
 
 # Dicionário para mapear queue_id -> (channel_id, message_id, mode, bet_value)
@@ -139,16 +143,44 @@ def format_bet_value(bet_value: float, currency_type: str) -> str:
         return format_sonhos(bet_value)
     return f"$ {bet_value:.2f}"
 
+def is_team_mode(mode: str) -> bool:
+    """Verifica se o modo é baseado em times (2v2, 3v3, 4v4)"""
+    return isinstance(mode, str) and mode.startswith(("2v2", "3v3", "4v4"))
+
 def is_2v2_mode(mode: str) -> bool:
     return isinstance(mode, str) and mode.startswith("2v2")
 
+def is_3v3_mode(mode: str) -> bool:
+    return isinstance(mode, str) and mode.startswith("3v3")
+
+def is_4v4_mode(mode: str) -> bool:
+    return isinstance(mode, str) and mode.startswith("4v4")
+
+def get_team_size(mode: str) -> int:
+    """Retorna o tamanho de cada time baseado no modo"""
+    if mode.startswith("1v1"):
+        return 1
+    elif mode.startswith("2v2"):
+        return 2
+    elif mode.startswith("3v3"):
+        return 3
+    elif mode.startswith("4v4"):
+        return 4
+    return 1  # padrão
+
+def get_total_players(mode: str) -> int:
+    """Retorna o total de jogadores necessários"""
+    team_size = get_team_size(mode)
+    return team_size * 2
+
 def split_teams_from_queue(mode: str, queue: list[int]) -> tuple[list[int], list[int]]:
-    if not is_2v2_mode(mode):
+    if not is_team_mode(mode):
         return queue[:1], queue[1:2]
-    return queue[:2], queue[2:4]
+    team_size = get_team_size(mode)
+    return queue[:team_size], queue[team_size:team_size*2]
 
 def teams_full(mode: str, queue: list[int]) -> bool:
-    return len(queue) >= (4 if is_2v2_mode(mode) else 2)
+    return len(queue) >= get_total_players(mode)
 
 def render_team_mentions(user_ids: list[int]) -> str:
     if not user_ids:
@@ -156,11 +188,12 @@ def render_team_mentions(user_ids: list[int]) -> str:
     return ", ".join([f"<@{uid}>" for uid in user_ids])
 
 def queue_embed_fields_for_mode(mode: str, queue: list[int]) -> dict:
-    if is_2v2_mode(mode):
+    if is_team_mode(mode):
         t1, t2 = split_teams_from_queue(mode, queue)
+        team_size = get_team_size(mode)
         return {
-            "team1": ("Time 1", f"{len(t1)}/2\n{render_team_mentions(t1)}"),
-            "team2": ("Time 2", f"{len(t2)}/2\n{render_team_mentions(t2)}"),
+            "team1": ("Time 1", f"{len(t1)}/{team_size}\n{render_team_mentions(t1)}"),
+            "team2": ("Time 2", f"{len(t2)}/{team_size}\n{render_team_mentions(t2)}"),
         }
     return {
         "queue": ("Fila", render_team_mentions(queue) if queue else "vazio")
@@ -1322,308 +1355,237 @@ class Unified2v2PanelView(discord.ui.View):
 
         async with queue_locks[misto_base]:
             for qid in self._all_team_qids(message_id)[2:]:
-                if user_id in db.get_queue(qid):
+                queue = db.get_queue(qid)
+                if user_id in queue:
                     db.remove_from_queue(qid, user_id)
                     removed = True
+                    break
 
-        meta = db.get_panel_metadata(interaction.message.id) or {}
-        currency_type = meta.get('currency_type', 'sonhos')
-        await self._update_panel(interaction, float(meta['bet_value']), currency_type)
+        if removed:
+            meta = db.get_panel_metadata(interaction.message.id) or {}
+            currency_type = meta.get('currency_type', 'sonhos')
+            await self._update_panel(interaction, float(meta['bet_value']), currency_type)
         await interaction.followup.send("Você saiu da fila." if removed else "Você não está em nenhuma fila deste painel.", ephemeral=True)
 
 
-class ConfirmPaymentButton(discord.ui.View):
-    def __init__(self, bet_id: str):
+class Unified3v3PanelView(discord.ui.View):
+    def __init__(self):
         super().__init__(timeout=None)
-        self.bet_id = bet_id
 
-    @discord.ui.button(label='Confirmar Pagamento', style=discord.ButtonStyle.green, custom_id='persistent:confirm_payment')
-    async def confirm_payment_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log(f"🔍 Botão 'Confirmar Pagamento' clicado - bet_id={self.bet_id}")
-        bet = db.get_active_bet(self.bet_id)
+    async def _load_panel(self, interaction: discord.Interaction) -> Optional[dict]:
+        try:
+            return db.get_panel_metadata(interaction.message.id)
+        except Exception:
+            return None
 
-        if not bet:
-            log(f"❌ Aposta não encontrada: bet_id={self.bet_id}")
-            # Tenta buscar pelo canal como fallback
-            bet = db.get_bet_by_channel(interaction.channel_id)
-            if bet:
-                log(f"✅ Aposta encontrada pelo canal: {bet.bet_id}")
-                self.bet_id = bet.bet_id
-            else:
-                log(f"❌ Aposta não encontrada nem por bet_id nem por channel_id")
-                await interaction.response.send_message(
-                    "Esta aposta não foi encontrada.\n"
-                    "Use o comando /confirmar-pagamento dentro do tópico da aposta.",
-                    ephemeral=True
-                )
-                return
+    def _base_qid(self, mode: str, message_id: int) -> str:
+        return f"{mode}_{message_id}"
+
+    def _team_qids(self, base_qid: str) -> tuple[str, str]:
+        return f"{base_qid}_team1", f"{base_qid}_team2"
+
+    async def _ensure_lock(self, queue_id: str):
+        if queue_id not in queue_locks:
+            async with queue_locks_creation_lock:
+                if queue_id not in queue_locks:
+                    queue_locks[queue_id] = asyncio.Lock()
+
+    def _all_team_qids(self, message_id: int) -> list[str]:
+        mob_base = self._base_qid("3v3-mob", message_id)
+        misto_base = self._base_qid("3v3-misto", message_id)
+        mob_t1, mob_t2 = self._team_qids(mob_base)
+        misto_t1, misto_t2 = self._team_qids(misto_base)
+        return [mob_t1, mob_t2, misto_t1, misto_t2]
+
+    async def _update_panel(self, interaction: discord.Interaction, bet_value: float, currency_type: str, message_id_override: int | None = None):
+        message_id = message_id_override or interaction.message.id
+
+        mob_base = self._base_qid("3v3-mob", message_id)
+        misto_base = self._base_qid("3v3-misto", message_id)
+        mob_t1, mob_t2 = self._team_qids(mob_base)
+        misto_t1, misto_t2 = self._team_qids(misto_base)
+
+        mob1 = db.get_queue(mob_t1)
+        mob2 = db.get_queue(mob_t2)
+        misto1 = db.get_queue(misto_t1)
+        misto2 = db.get_queue(misto_t2)
+
+        if currency_type == "sonhos":
+            valor_formatado = format_sonhos(bet_value)
+            moeda_nome = "Sonhos"
         else:
-            log(f"✅ Aposta encontrada: {bet.bet_id}")
+            valor_formatado = f"$ {bet_value:.2f}"
+            moeda_nome = "Dinheiro"
 
-        if bet.mediator_id == 0:
-            await interaction.response.send_message(
-                "Aguarde um mediador aceitar esta aposta antes de confirmar pagamento.",
-                ephemeral=True
-            )
+        embed_update = discord.Embed(title="Painel 3v3", color=EMBED_COLOR)
+        embed_update.add_field(name="Valor", value=valor_formatado, inline=True)
+        embed_update.add_field(name="Moeda", value=moeda_nome, inline=True)
+        embed_update.add_field(
+            name="📱 3v3 MOB",
+            value=(
+                f"T1 {len(mob1)}/3\n{render_team_mentions(mob1)}\n"
+                f"T2 {len(mob2)}/3\n{render_team_mentions(mob2)}"
+            ),
+            inline=True
+        )
+        embed_update.add_field(
+            name="💻 3v3 MISTO",
+            value=(
+                f"T1 {len(misto1)}/3\n{render_team_mentions(misto1)}\n"
+                f"T2 {len(misto2)}/3\n{render_team_mentions(misto2)}"
+            ),
+            inline=True
+        )
+        if interaction.guild and interaction.guild.icon:
+            embed_update.set_thumbnail(url=interaction.guild.icon.url)
+        embed_update.set_footer(text=f"{interaction.guild.name if interaction.guild else ''}", icon_url=interaction.guild.icon.url if interaction.guild and interaction.guild.icon else None)
+
+        try:
+            message = await interaction.channel.fetch_message(message_id)
+            await message.edit(embed=embed_update)
+        except Exception as e:
+            log(f"❌ Erro ao atualizar painel 3v3 unificado: {e}")
+
+    async def _join_team(self, interaction: discord.Interaction, mode: str, team_number: int, message_id_override: int | None = None):
+        target_message_id = message_id_override or interaction.message.id
+        meta = db.get_panel_metadata(target_message_id)
+        if not meta:
+            await interaction.followup.send("⚠️ Dados do painel não encontrados. Recrie o painel.", ephemeral=True)
+            return
+
+        bet_value = float(meta['bet_value'])
+        mediator_fee = float(meta['mediator_fee'])
+        currency_type = meta.get('currency_type', 'sonhos')
+        message_id = target_message_id
+
+        base_qid = self._base_qid(mode, message_id)
+        team1_qid, team2_qid = self._team_qids(base_qid)
+
+        user_id = interaction.user.id
+        if db.is_user_in_active_bet(user_id):
+            await interaction.followup.send("Você já está em uma aposta ativa.", ephemeral=True)
+            return
+
+        await self._ensure_lock(base_qid)
+
+        async with queue_locks[base_qid]:
+            team1 = db.get_queue(team1_qid)
+            team2 = db.get_queue(team2_qid)
+
+            if user_id in team1 or user_id in team2:
+                await interaction.followup.send("Você já está nesta fila.", ephemeral=True)
+                return
+
+            target_team = team1 if team_number == 1 else team2
+            if len(target_team) >= 3:
+                await interaction.followup.send(f"Time {team_number} está cheio.", ephemeral=True)
+                return
+
+            db.add_to_queue(team1_qid if team_number == 1 else team2_qid, user_id)
+
+        await self._update_panel(interaction, bet_value, currency_type, message_id_override=message_id)
+        await self._try_create_bet_if_full(interaction, mode, base_qid, bet_value, mediator_fee, currency_type, panel_message_id=message_id)
+
+    async def _try_create_bet_if_full(self, interaction: discord.Interaction, mode: str, base_qid: str, bet_value: float, mediator_fee: float, currency_type: str, panel_message_id: int):
+        team1_qid, team2_qid = self._team_qids(base_qid)
+        team1 = db.get_queue(team1_qid)
+        team2 = db.get_queue(team2_qid)
+        if len(team1) < 3 or len(team2) < 3:
+            return
+
+        db.set_queue(team1_qid, [])
+        db.set_queue(team2_qid, [])
+
+        await self._update_panel(interaction, bet_value, currency_type, message_id_override=panel_message_id)
+
+        await create_bet_channel(
+            interaction.guild,
+            mode,
+            team1[0],
+            team2[0],
+            float(bet_value),
+            float(mediator_fee),
+            interaction.channel_id,
+            currency_type=currency_type,
+        )
+
+    @discord.ui.button(label='📱 3v3 MOB', style=discord.ButtonStyle.red, row=0, custom_id='persistent:panel_3v3_mob')
+    async def choose_3v3_mob(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message(
+            "Escolha o time para entrar em 3v3 MOB:",
+            ephemeral=True,
+            view=self._team_selector_view("3v3-mob", interaction.message.id)
+        )
+
+    @discord.ui.button(label='💻 3v3 MISTO', style=discord.ButtonStyle.red, row=0, custom_id='persistent:panel_3v3_misto')
+    async def choose_3v3_misto(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message(
+            "Escolha o time para entrar em 3v3 MISTO:",
+            ephemeral=True,
+            view=self._team_selector_view("3v3-misto", interaction.message.id)
+        )
+
+    def _team_selector_view(self, mode: str, panel_message_id: int) -> discord.ui.View:
+        parent = self
+
+        class TeamSelector(discord.ui.View):
+            def __init__(self):
+                super().__init__(timeout=60)
+
+            @discord.ui.button(label="Time 1", style=discord.ButtonStyle.red, row=0)
+            async def choose_team1(self, interaction: discord.Interaction, button: discord.ui.Button):
+                await interaction.response.defer(ephemeral=True)
+                await parent._join_team(interaction, mode, 1, message_id_override=panel_message_id)
+                self.stop()
+
+            @discord.ui.button(label="Time 2", style=discord.ButtonStyle.red, row=0)
+            async def choose_team2(self, interaction: discord.Interaction, button: discord.ui.Button):
+                await interaction.response.defer(ephemeral=True)
+                await parent._join_team(interaction, mode, 2, message_id_override=panel_message_id)
+                self.stop()
+
+        return TeamSelector()
+
+    @discord.ui.button(label='Sair', style=discord.ButtonStyle.gray, row=0, custom_id='persistent:panel_3v3_leave')
+    async def leave_panel_3v3(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        meta = await self._load_panel(interaction)
+        if not meta:
+            await interaction.followup.send("⚠️ Dados do painel não encontrados. Recrie o painel.", ephemeral=True)
             return
 
         user_id = interaction.user.id
+        message_id = interaction.message.id
+        removed = False
 
-        if user_id == bet.player1_id:
-            if bet.player1_confirmed:
-                await interaction.response.send_message(
-                    "Você já confirmou seu pagamento.",
-                    ephemeral=True
-                )
-                return
+        mob_base = self._base_qid("3v3-mob", message_id)
+        misto_base = self._base_qid("3v3-misto", message_id)
 
-            bet.player1_confirmed = True
-            db.update_active_bet(bet)
+        await self._ensure_lock(mob_base)
+        await self._ensure_lock(misto_base)
 
-            # Usa menção direta (economiza chamadas API)
-            embed = discord.Embed(
-                title="Pagamento Confirmado",
-                description=f"<@{bet.player1_id}>",
-                color=EMBED_COLOR
-            )
-            embed.set_footer(text=CREATOR_FOOTER)
-            await interaction.response.send_message(embed=embed)
+        async with queue_locks[mob_base]:
+            for qid in self._all_team_qids(message_id)[:2]:
+                queue = db.get_queue(qid)
+                if user_id in queue:
+                    db.remove_from_queue(qid, user_id)
+                    removed = True
+                    break
 
-        elif user_id == bet.player2_id:
-            if bet.player2_confirmed:
-                await interaction.response.send_message(
-                    "Você já confirmou seu pagamento.",
-                    ephemeral=True
-                )
-                return
+        async with queue_locks[misto_base]:
+            for qid in self._all_team_qids(message_id)[2:]:
+                queue = db.get_queue(qid)
+                if user_id in queue:
+                    db.remove_from_queue(qid, user_id)
+                    removed = True
+                    break
 
-            bet.player2_confirmed = True
-            db.update_active_bet(bet)
+        if removed:
+            meta = db.get_panel_metadata(message_id) or {}
+            currency_type = meta.get('currency_type', 'sonhos')
+            await self._update_panel(interaction, float(meta['bet_value']), currency_type)
 
-            # Usa menção direta (economiza chamadas API)
-            embed = discord.Embed(
-                title="Pagamento Confirmado",
-                description=f"<@{bet.player2_id}>",
-                color=EMBED_COLOR
-            )
-            embed.set_footer(text=CREATOR_FOOTER)
-            await interaction.response.send_message(embed=embed)
-        else:
-            await interaction.response.send_message(
-                "Você não é um dos jogadores desta aposta.",
-                ephemeral=True
-            )
-            return
-
-        if bet.is_fully_confirmed():
-            # Usa menções diretas (economiza API calls)
-            embed = discord.Embed(
-                title="Pagamentos Confirmados",
-                description="Partida liberada",
-                color=EMBED_COLOR
-            )
-            embed.set_footer(text=CREATOR_FOOTER)
-
-            await interaction.channel.send(embed=embed)
-
-
-class PixModal(discord.ui.Modal, title='Inserir Chave PIX'):
-    pix_key = discord.ui.TextInput(
-        label='Chave PIX',
-        placeholder='Digite sua chave PIX (CPF, telefone, email, etc)',
-        required=True,
-        max_length=100
-    )
-
-    def __init__(self, bet_id: str):
-        super().__init__()
-        self.bet_id = bet_id
-
-    async def on_submit(self, interaction: discord.Interaction):
-        bet = db.get_active_bet(self.bet_id)
-        if not bet:
-            await interaction.response.send_message("Aposta não encontrada.", ephemeral=True)
-            return
-
-        if bet.mediator_id != 0:
-            # Usa menção direta (economiza chamadas API)
-            await interaction.response.send_message(
-                f"Esta aposta já tem um mediador: <@{bet.mediator_id}>",
-                ephemeral=True
-            )
-            return
-
-        bet.mediator_id = interaction.user.id
-        bet.mediator_pix = str(self.pix_key.value)
-        db.update_active_bet(bet)
-
-        # Usa menções diretas (economiza chamadas API)
-        embed = discord.Embed(
-            title="Mediador Aceito",
-            color=EMBED_COLOR
-        )
-        embed.add_field(name="Modo", value=bet.mode.replace("-", " ").title(), inline=True)
-        embed.add_field(name="Jogadores", value=f"<@{bet.player1_id}> vs <@{bet.player2_id}>", inline=False)
-        embed.add_field(name="Mediador", value=interaction.user.mention, inline=True)
-        embed.add_field(name="PIX", value=f"`{bet.mediator_pix}`", inline=True)
-        embed.add_field(name="Instrução", value="Envie o pagamento e clique no botão abaixo para confirmar", inline=False)
-        if interaction.guild.icon:
-            embed.set_thumbnail(url=interaction.guild.icon.url)
-        embed.set_footer(text=CREATOR_FOOTER)
-
-        confirm_view = ConfirmPaymentButton(self.bet_id)
-        await interaction.response.send_message(embed=embed, view=confirm_view)
-
-        try:
-            original_message = await interaction.channel.fetch_message(interaction.message.id)
-            await original_message.edit(view=None)
-        except discord.NotFound:
-            log("Mensagem original não encontrada (já deletada)")
-        except Exception as e:
-            log(f"Erro ao remover botões da mensagem original: {e}")
-
-        # Busca o tópico (thread) da aposta
-        thread = interaction.guild.get_thread(bet.channel_id)
-        if not thread:
-            # Tenta buscar threads arquivados
-            try:
-                thread = await interaction.guild.fetch_channel(bet.channel_id)
-            except discord.NotFound:
-                log(f"Thread {bet.channel_id} não encontrado (já deletado)")
-            except Exception as e:
-                log(f"Erro ao buscar thread: {e}")
-
-        if thread:
-            # Adiciona o mediador ao tópico
-            await thread.add_user(interaction.user)
-
-            # Configura permissões para o mediador enviar mensagens e anexar arquivos
-            try:
-                await thread.set_permissions(
-                    interaction.user,
-                    overwrite=discord.PermissionOverwrite(
-                        send_messages=True,
-                        attach_files=True,
-                        embed_links=True,
-                        read_message_history=True
-                    )
-                )
-                log(f"✅ Permissões configuradas para o mediador no tópico")
-            except Exception as e:
-                log(f"⚠️ Erro ao configurar permissões do mediador: {e}")
-
-            await thread.send(f"<@{bet.player1_id}> <@{bet.player2_id}> Um mediador aceitou a aposta! ✅")
-
-
-class AcceptMediationButton(discord.ui.View):
-    def __init__(self, bet_id: str):
-        super().__init__(timeout=None)
-        self.bet_id = bet_id
-
-    @discord.ui.button(label='Aceitar Mediação', style=discord.ButtonStyle.green, custom_id='persistent:accept_mediation')
-    async def accept_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log(f"🔍 Botão 'Aceitar Mediação' clicado - bet_id={self.bet_id}")
-        bet = db.get_active_bet(self.bet_id)
-
-        if not bet:
-            log(f"❌ Aposta não encontrada: bet_id={self.bet_id}")
-            # Tenta buscar pelo canal como fallback
-            bet = db.get_bet_by_channel(interaction.channel_id)
-            if bet:
-                log(f"✅ Aposta encontrada pelo canal: {bet.bet_id}")
-                self.bet_id = bet.bet_id
-            else:
-                log(f"❌ Aposta não encontrada nem por bet_id nem por channel_id")
-                await interaction.response.send_message(
-                    "Esta aposta não foi encontrada.\n"
-                    "Use o comando /confirmar-pagamento dentro do tópico da aposta.",
-                    ephemeral=True
-                )
-                return
-        else:
-            log(f"✅ Aposta encontrada: {bet.bet_id}")
-
-        if bet.mediator_id != 0:
-            log(f"⚠️ Aposta já tem mediador: {bet.mediator_id}")
-            await interaction.response.send_message("Esta aposta já tem um mediador.", ephemeral=True)
-            return
-
-        mediator_role_id = db.get_mediator_role(interaction.guild.id)
-        has_mediator_role = mediator_role_id and discord.utils.get(interaction.user.roles, id=mediator_role_id) is not None
-
-        if not has_mediator_role:
-            if mediator_role_id:
-                await interaction.response.send_message(
-                    f"Você precisa ter o cargo <@&{mediator_role_id}> para aceitar mediação.",
-                    ephemeral=True
-                )
-            else:
-                await interaction.response.send_message(
-                    "Este servidor ainda não configurou um cargo de mediador.\n"
-                    "Um administrador deve usar /setup @cargo para configurar.",
-                    ephemeral=True
-                )
-            return
-
-        # Detecta o tipo de moeda da aposta
-        currency_type = getattr(bet, 'currency_type', 'sonhos')
-
-        if currency_type == "sonhos":
-            # Aposta em Sonhos - aceita SEM pedir PIX
-            log(f"💎 Aceitando mediação de aposta em Sonhos (sem PIX)")
-            await accept_bet_with_sonhos(interaction, self.bet_id)
-        else:
-            # Aposta em Reais - pede PIX do mediador
-            log(f"💵 Aceitando mediação de aposta em Reais (com PIX)")
-            await interaction.response.send_modal(PixModal(self.bet_id))
-
-    @discord.ui.button(label='Cancelar Aposta', style=discord.ButtonStyle.red, custom_id='persistent:cancel_bet')
-    async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        bet = db.get_active_bet(self.bet_id)
-
-        if not bet:
-            await interaction.response.send_message("Aposta não encontrada.", ephemeral=True)
-            return
-
-        # Verifica se tem o cargo de mediador configurado
-        mediator_role_id = db.get_mediator_role(interaction.guild.id)
-        has_mediator_role = mediator_role_id and discord.utils.get(interaction.user.roles, id=mediator_role_id) is not None
-
-        if not has_mediator_role:
-            if mediator_role_id:
-                await interaction.response.send_message(
-                    f"Você precisa ter o cargo <@&{mediator_role_id}> para cancelar apostas.",
-                    ephemeral=True
-                )
-            else:
-                await interaction.response.send_message(
-                    "Este servidor ainda não configurou um cargo de mediador.\n"
-                    "Um administrador deve usar /setup @cargo para configurar.",
-                    ephemeral=True
-                )
-            return
-
-        # Usa menções diretas (economiza chamadas API)
-        embed = discord.Embed(
-            title="Aposta Cancelada",
-            description=f"<@{bet.player1_id}> e <@{bet.player2_id}>",
-            color=EMBED_COLOR
-        )
-        embed.set_footer(text=CREATOR_FOOTER)
-
-        await interaction.response.send_message(embed=embed)
-
-        bet.finished_at = datetime.now().isoformat()
-        db.finish_bet(bet)
-
-        await asyncio.sleep(10)
-
-        try:
-            # Arquiva e bloqueia o tópico ao invés de deletar
-            if isinstance(interaction.channel, discord.Thread):
-                await interaction.channel.edit(archived=True, locked=True)
-        except:
-            pass
+        await interaction.followup.send("Você saiu da fila." if removed else "Você não está em nenhuma fila deste painel.", ephemeral=True)
 
 
 # ==================== CENTRAL DE MEDIADORES ====================
@@ -1671,96 +1633,224 @@ class MediatorCentralPixModal(discord.ui.Modal, title='Informe sua Chave PIX'):
         log(f"✅ Mediador {user_id} entrou no central do guild {self.guild_id}")
 
 
-class MediatorCentralView(discord.ui.View):
-    """View do painel do Central de Mediadores"""
-    def __init__(self, guild_id: int = None):
+class Unified4v4PanelView(discord.ui.View):
+    def __init__(self):
         super().__init__(timeout=None)
-        self.guild_id = guild_id
 
-    @discord.ui.button(label='Aguardar Aposta', style=discord.ButtonStyle.green, custom_id='persistent:mediator_central_join', emoji='⏳')
-    async def join_central_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        user_id = interaction.user.id
-        guild_id = interaction.guild.id
-        
-        log(f"👆 Mediador {user_id} clicou em 'Aguardar Aposta' no central")
-        
-        # Verifica se tem cargo de mediador
-        mediator_role_id = db.get_mediator_role(guild_id)
-        has_mediator_role = mediator_role_id and discord.utils.get(interaction.user.roles, id=mediator_role_id) is not None
-        
-        if not has_mediator_role:
-            if mediator_role_id:
-                await interaction.response.send_message(
-                    f"Você precisa ter o cargo <@&{mediator_role_id}> para entrar no central.",
-                    ephemeral=True
-                )
-            else:
-                await interaction.response.send_message(
-                    "Este servidor ainda não configurou um cargo de mediador.\n"
-                    "Um administrador deve usar /setup @cargo para configurar.",
-                    ephemeral=True
-                )
-            return
-        
-        # Verifica se já está no central
-        if db.is_mediator_in_central(guild_id, user_id):
-            await interaction.response.send_message(
-                "Você já está no Central de Mediadores aguardando apostas.",
-                ephemeral=True
-            )
-            return
-        
-        # Verifica se já tem PIX salvo
-        saved_pix = db.get_mediator_pix(user_id)
-        
-        if saved_pix:
-            # PIX já salvo - entra direto
-            success = db.add_mediator_to_central(guild_id, user_id, saved_pix)
-            
-            if not success:
-                await interaction.response.send_message(
-                    "O Central de Mediadores está cheio (10 vagas). Tente novamente mais tarde.",
-                    ephemeral=True
-                )
-                return
-            
-            # Atualiza o painel
-            await update_mediator_central_panel(interaction.guild)
-            
-            await interaction.response.send_message(
-                f"Você entrou no Central de Mediadores!\n"
-                f"Usando seu PIX salvo: `{saved_pix}`\n"
-                f"Você será atribuído automaticamente quando uma aposta começar.\n"
-                f"**Atenção:** Você será removido após 2 horas sem apostas.",
-                ephemeral=True
-            )
-            log(f"✅ Mediador {user_id} entrou no central (PIX já salvo)")
+    async def _load_panel(self, interaction: discord.Interaction) -> Optional[dict]:
+        try:
+            return db.get_panel_metadata(interaction.message.id)
+        except Exception:
+            return None
+
+    def _base_qid(self, mode: str, message_id: int) -> str:
+        return f"{mode}_{message_id}"
+
+    def _team_qids(self, base_qid: str) -> tuple[str, str]:
+        return f"{base_qid}_team1", f"{base_qid}_team2"
+
+    async def _ensure_lock(self, queue_id: str):
+        if queue_id not in queue_locks:
+            async with queue_locks_creation_lock:
+                if queue_id not in queue_locks:
+                    queue_locks[queue_id] = asyncio.Lock()
+
+    def _all_team_qids(self, message_id: int) -> list[str]:
+        mob_base = self._base_qid("4v4-mob", message_id)
+        misto_base = self._base_qid("4v4-misto", message_id)
+        mob_t1, mob_t2 = self._team_qids(mob_base)
+        misto_t1, misto_t2 = self._team_qids(misto_base)
+        return [mob_t1, mob_t2, misto_t1, misto_t2]
+
+    async def _update_panel(self, interaction: discord.Interaction, bet_value: float, currency_type: str, message_id_override: int | None = None):
+        message_id = message_id_override or interaction.message.id
+
+        mob_base = self._base_qid("4v4-mob", message_id)
+        misto_base = self._base_qid("4v4-misto", message_id)
+        mob_t1, mob_t2 = self._team_qids(mob_base)
+        misto_t1, misto_t2 = self._team_qids(misto_base)
+
+        mob1 = db.get_queue(mob_t1)
+        mob2 = db.get_queue(mob_t2)
+        misto1 = db.get_queue(misto_t1)
+        misto2 = db.get_queue(misto_t2)
+
+        if currency_type == "sonhos":
+            valor_formatado = format_sonhos(bet_value)
+            moeda_nome = "Sonhos"
         else:
-            # Precisa informar PIX - abre modal
-            await interaction.response.send_modal(MediatorCentralPixModal(guild_id))
+            valor_formatado = f"$ {bet_value:.2f}"
+            moeda_nome = "Dinheiro"
 
-    @discord.ui.button(label='Sair do Central', style=discord.ButtonStyle.gray, custom_id='persistent:mediator_central_leave', emoji='🚪')
-    async def leave_central_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        user_id = interaction.user.id
-        guild_id = interaction.guild.id
-        
-        if not db.is_mediator_in_central(guild_id, user_id):
-            await interaction.response.send_message(
-                "Você não está no Central de Mediadores.",
-                ephemeral=True
-            )
-            return
-        
-        db.remove_mediator_from_central(guild_id, user_id)
-        
-        # Atualiza o painel
-        await update_mediator_central_panel(interaction.guild)
-        
-        await interaction.response.send_message(
-            "Você saiu do Central de Mediadores.",
-            ephemeral=True
+        embed_update = discord.Embed(title="Painel 4v4", color=EMBED_COLOR)
+        embed_update.add_field(name="Valor", value=valor_formatado, inline=True)
+        embed_update.add_field(name="Moeda", value=moeda_nome, inline=True)
+        embed_update.add_field(
+            name="📱 4v4 MOB",
+            value=(
+                f"T1 {len(mob1)}/4\n{render_team_mentions(mob1)}\n"
+                f"T2 {len(mob2)}/4\n{render_team_mentions(mob2)}"
+            ),
+            inline=True
         )
-        log(f"🚪 Mediador {user_id} saiu do central do guild {guild_id}")
+        embed_update.add_field(
+            name="💻 4v4 MISTO",
+            value=(
+                f"T1 {len(misto1)}/4\n{render_team_mentions(misto1)}\n"
+                f"T2 {len(misto2)}/4\n{render_team_mentions(misto2)}"
+            ),
+            inline=True
+        )
+        if interaction.guild and interaction.guild.icon:
+            embed_update.set_thumbnail(url=interaction.guild.icon.url)
+        embed_update.set_footer(text=f"{interaction.guild.name if interaction.guild else ''}", icon_url=interaction.guild.icon.url if interaction.guild and interaction.guild.icon else None)
+
+        try:
+            message = await interaction.channel.fetch_message(message_id)
+            await message.edit(embed=embed_update)
+        except Exception as e:
+            log(f"❌ Erro ao atualizar painel 4v4 unificado: {e}")
+
+    async def _join_team(self, interaction: discord.Interaction, mode: str, team_number: int, message_id_override: int | None = None):
+        target_message_id = message_id_override or interaction.message.id
+        meta = db.get_panel_metadata(target_message_id)
+        if not meta:
+            await interaction.followup.send("⚠️ Dados do painel não encontrados. Recrie o painel.", ephemeral=True)
+            return
+
+        bet_value = float(meta['bet_value'])
+        mediator_fee = float(meta['mediator_fee'])
+        currency_type = meta.get('currency_type', 'sonhos')
+        message_id = target_message_id
+
+        base_qid = self._base_qid(mode, message_id)
+        team1_qid, team2_qid = self._team_qids(base_qid)
+
+        user_id = interaction.user.id
+        if db.is_user_in_active_bet(user_id):
+            await interaction.followup.send("Você já está em uma aposta ativa.", ephemeral=True)
+            return
+
+        await self._ensure_lock(base_qid)
+
+        async with queue_locks[base_qid]:
+            team1 = db.get_queue(team1_qid)
+            team2 = db.get_queue(team2_qid)
+
+            if user_id in team1 or user_id in team2:
+                await interaction.followup.send("Você já está nesta fila.", ephemeral=True)
+                return
+
+            target_team = team1 if team_number == 1 else team2
+            if len(target_team) >= 4:
+                await interaction.followup.send(f"Time {team_number} está cheio.", ephemeral=True)
+                return
+
+            db.add_to_queue(team1_qid if team_number == 1 else team2_qid, user_id)
+
+        await self._update_panel(interaction, bet_value, currency_type, message_id_override=message_id)
+        await self._try_create_bet_if_full(interaction, mode, base_qid, bet_value, mediator_fee, currency_type, panel_message_id=message_id)
+
+    async def _try_create_bet_if_full(self, interaction: discord.Interaction, mode: str, base_qid: str, bet_value: float, mediator_fee: float, currency_type: str, panel_message_id: int):
+        team1_qid, team2_qid = self._team_qids(base_qid)
+        team1 = db.get_queue(team1_qid)
+        team2 = db.get_queue(team2_qid)
+        if len(team1) < 4 or len(team2) < 4:
+            return
+
+        db.set_queue(team1_qid, [])
+        db.set_queue(team2_qid, [])
+
+        await self._update_panel(interaction, bet_value, currency_type, message_id_override=panel_message_id)
+
+        await create_bet_channel(
+            interaction.guild,
+            mode,
+            team1[0],
+            team2[0],
+            float(bet_value),
+            float(mediator_fee),
+            interaction.channel_id,
+            currency_type=currency_type,
+        )
+
+    @discord.ui.button(label='📱 4v4 MOB', style=discord.ButtonStyle.red, row=0, custom_id='persistent:panel_4v4_mob')
+    async def choose_4v4_mob(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message(
+            "Escolha o time para entrar em 4v4 MOB:",
+            ephemeral=True,
+            view=self._team_selector_view("4v4-mob", interaction.message.id)
+        )
+
+    @discord.ui.button(label='💻 4v4 MISTO', style=discord.ButtonStyle.red, row=0, custom_id='persistent:panel_4v4_misto')
+    async def choose_4v4_misto(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message(
+            "Escolha o time para entrar em 4v4 MISTO:",
+            ephemeral=True,
+            view=self._team_selector_view("4v4-misto", interaction.message.id)
+        )
+
+    def _team_selector_view(self, mode: str, panel_message_id: int) -> discord.ui.View:
+        parent = self
+
+        class TeamSelector(discord.ui.View):
+            def __init__(self):
+                super().__init__(timeout=60)
+
+            @discord.ui.button(label="Time 1", style=discord.ButtonStyle.red, row=0)
+            async def choose_team1(self, interaction: discord.Interaction, button: discord.ui.Button):
+                await interaction.response.defer(ephemeral=True)
+                await parent._join_team(interaction, mode, 1, message_id_override=panel_message_id)
+                self.stop()
+
+            @discord.ui.button(label="Time 2", style=discord.ButtonStyle.red, row=0)
+            async def choose_team2(self, interaction: discord.Interaction, button: discord.ui.Button):
+                await interaction.response.defer(ephemeral=True)
+                await parent._join_team(interaction, mode, 2, message_id_override=panel_message_id)
+                self.stop()
+
+        return TeamSelector()
+
+    @discord.ui.button(label='Sair', style=discord.ButtonStyle.gray, row=0, custom_id='persistent:panel_4v4_leave')
+    async def leave_panel_4v4(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        meta = await self._load_panel(interaction)
+        if not meta:
+            await interaction.followup.send("⚠️ Dados do painel não encontrados. Recrie o painel.", ephemeral=True)
+            return
+
+        user_id = interaction.user.id
+        message_id = interaction.message.id
+        removed = False
+
+        mob_base = self._base_qid("4v4-mob", message_id)
+        misto_base = self._base_qid("4v4-misto", message_id)
+
+        await self._ensure_lock(mob_base)
+        await self._ensure_lock(misto_base)
+
+        async with queue_locks[mob_base]:
+            for qid in self._all_team_qids(message_id)[:2]:
+                queue = db.get_queue(qid)
+                if user_id in queue:
+                    db.remove_from_queue(qid, user_id)
+                    removed = True
+                    break
+
+        async with queue_locks[misto_base]:
+            for qid in self._all_team_qids(message_id)[2:]:
+                queue = db.get_queue(qid)
+                if user_id in queue:
+                    db.remove_from_queue(qid, user_id)
+                    removed = True
+                    break
+
+        if removed:
+            meta = db.get_panel_metadata(message_id) or {}
+            currency_type = meta.get('currency_type', 'sonhos')
+            await self._update_panel(interaction, float(meta['bet_value']), currency_type)
+
+        await interaction.followup.send("Você saiu da fila." if removed else "Você não está em nenhuma fila deste painel.", ephemeral=True)
 
 
 async def update_mediator_central_panel(guild: discord.Guild):
@@ -2351,10 +2441,16 @@ def register_all_commands(target_bot):
 @app_commands.choices(modo=[
     app_commands.Choice(name="Painel 1v1", value="1v1"),
     app_commands.Choice(name="Painel 2v2", value="2v2"),
+    app_commands.Choice(name="Painel 3v3", value="3v3"),
+    app_commands.Choice(name="Painel 4v4", value="4v4"),
     app_commands.Choice(name="1v1 MOB", value="1v1-mob"),
     app_commands.Choice(name="1v1 MISTO", value="1v1-misto"),
     app_commands.Choice(name="2v2 MOB", value="2v2-mob"),
     app_commands.Choice(name="2v2 MISTO", value="2v2-misto"),
+    app_commands.Choice(name="3v3 MOB", value="3v3-mob"),
+    app_commands.Choice(name="3v3 MISTO", value="3v3-misto"),
+    app_commands.Choice(name="4v4 MOB", value="4v4-mob"),
+    app_commands.Choice(name="4v4 MISTO", value="4v4-misto"),
 ])
 @app_commands.choices(moeda=[
     app_commands.Choice(name="Dinheiro", value="reais"),
@@ -2425,21 +2521,29 @@ async def mostrar_fila(interaction: discord.Interaction, modo: app_commands.Choi
     guild_name = interaction.guild.name if interaction.guild else ""
 
     # Decide view and embed based on mode
-    is_unified = mode in ("1v1", "2v2")
+    is_unified = mode in ("1v1", "2v2", "3v3", "4v4")
     is_2v2 = mode.startswith("2v2")
+    is_3v3 = mode.startswith("3v3")
+    is_4v4 = mode.startswith("4v4")
 
     if is_unified:
         # Unified panel (MOB + MISTO in same panel)
-        title = format_panel_title(guild_name, "1v1" if mode == "1v1" else "2v2")
+        title = format_panel_title(guild_name, "1v1" if mode == "1v1" else "2v2" if mode == "2v2" else "3v3" if mode == "3v3" else "4v4")
         embed = discord.Embed(title=title, color=EMBED_COLOR)
         embed.add_field(name="Valor", value=valor_formatado, inline=True)
         if mode == "1v1":
-            embed.add_field(name="📱 1v1 MOB", value="0/2 —", inline=True)
-            embed.add_field(name="💻 1v1 MISTO", value="0/2 —", inline=True)
-        else:
-            embed.add_field(name="📱 2v2 MOB", value="T1 0/2 —\nT2 0/2 —", inline=True)
-            embed.add_field(name="💻 2v2 MISTO", value="T1 0/2 —\nT2 0/2 —", inline=True)
-        view = Unified2v2PanelView() if mode == "2v2" else Unified1v1PanelView()
+            embed.add_field(name="", value="0/2 —", inline=True)
+            embed.add_field(name="", value="0/2 —", inline=True)
+        elif mode == "2v2":
+            embed.add_field(name="", value="T1 0/2 —\nT2 0/2 —", inline=True)
+            embed.add_field(name="", value="T1 0/2 —\nT2 0/2 —", inline=True)
+        elif mode == "3v3":
+            embed.add_field(name="", value="T1 0/3 —\nT2 0/3 —", inline=True)
+            embed.add_field(name="", value="T1 0/3 —\nT2 0/3 —", inline=True)
+        elif mode == "4v4":
+            embed.add_field(name="", value="T1 0/4 —\nT2 0/4 —", inline=True)
+            embed.add_field(name="", value="T1 0/4 —\nT2 0/4 —", inline=True)
+        view = Unified2v2PanelView() if mode == "2v2" else Unified1v1PanelView() if mode == "1v1" else Unified3v3PanelView() if mode == "3v3" else Unified4v4PanelView()
     else:
         # Individual panel (only MOB or only MISTO)
         title = format_panel_title(guild_name, format_mode_label(mode))
@@ -2448,6 +2552,14 @@ async def mostrar_fila(interaction: discord.Interaction, modo: app_commands.Choi
         if is_2v2:
             embed.add_field(name="T1", value="0/2 —", inline=True)
             embed.add_field(name="T2", value="0/2 —", inline=True)
+            view = TeamQueueButton(mode, valor_numerico, taxa_numerica, None, currency_type)
+        elif is_3v3:
+            embed.add_field(name="T1", value="0/3 —", inline=True)
+            embed.add_field(name="T2", value="0/3 —", inline=True)
+            view = TeamQueueButton(mode, valor_numerico, taxa_numerica, None, currency_type)
+        elif is_4v4:
+            embed.add_field(name="T1", value="0/4 —", inline=True)
+            embed.add_field(name="T2", value="0/4 —", inline=True)
             view = TeamQueueButton(mode, valor_numerico, taxa_numerica, None, currency_type)
         else:
             embed.add_field(name="Fila", value="0/2 —", inline=True)
@@ -2475,6 +2587,10 @@ async def mostrar_fila(interaction: discord.Interaction, modo: app_commands.Choi
     if not is_unified:
         if is_2v2:
             view.message_id = message.id
+        elif is_3v3:
+            view.message_id = message.id
+        elif is_4v4:
+            view.message_id = message.id
         else:
             view.message_id = message.id
 
@@ -2484,7 +2600,7 @@ async def mostrar_fila(interaction: discord.Interaction, modo: app_commands.Choi
 
     # Confirma criação
     confirmation_msg = await interaction.followup.send(
-        f"✅ Painel criado com sucesso!\n"
+        f" Painel criado com sucesso!\n"
         f"Modo: {modo.name}\n"
         f"Valor: {valor_formatado}\n"
         f"Moeda: {moeda.name}\n"
@@ -2508,10 +2624,16 @@ async def mostrar_fila(interaction: discord.Interaction, modo: app_commands.Choi
 @app_commands.choices(modo=[
     app_commands.Choice(name="Painel 1v1", value="1v1"),
     app_commands.Choice(name="Painel 2v2", value="2v2"),
+    app_commands.Choice(name="Painel 3v3", value="3v3"),
+    app_commands.Choice(name="Painel 4v4", value="4v4"),
     app_commands.Choice(name="1v1 MOB", value="1v1-mob"),
     app_commands.Choice(name="1v1 MISTO", value="1v1-misto"),
     app_commands.Choice(name="2v2 MOB", value="2v2-mob"),
     app_commands.Choice(name="2v2 MISTO", value="2v2-misto"),
+    app_commands.Choice(name="3v3 MOB", value="3v3-mob"),
+    app_commands.Choice(name="3v3 MISTO", value="3v3-misto"),
+    app_commands.Choice(name="4v4 MOB", value="4v4-mob"),
+    app_commands.Choice(name="4v4 MISTO", value="4v4-misto"),
 ])
 @app_commands.choices(moeda=[
     app_commands.Choice(name="Dinheiro", value="reais"),
@@ -2553,13 +2675,15 @@ async def preset_filas(interaction: discord.Interaction, modo: app_commands.Choi
     # Defer a resposta para evitar timeout
     await interaction.response.defer(ephemeral=True)
 
-    log(f"🎯 Criando preset de filas: modo={modo.value}, moeda={currency_type}, taxa={taxa_str}")
+    log(f" Criando preset de filas: modo={modo.value}, moeda={currency_type}, taxa={taxa_str}")
 
     created_count = 0
     tasks = []
     guild_name = interaction.guild.name if interaction.guild else ""
-    is_unified = mode in ("1v1", "2v2")
+    is_unified = mode in ("1v1", "2v2", "3v3", "4v4")
     is_2v2 = mode.startswith("2v2")
+    is_3v3 = mode.startswith("3v3")
+    is_4v4 = mode.startswith("4v4")
 
     for valor_numerico in preset_values:
         try:
@@ -2590,16 +2714,22 @@ async def preset_filas(interaction: discord.Interaction, modo: app_commands.Choi
 
             if is_unified:
                 # Unified panel (MOB + MISTO in same panel)
-                title = format_panel_title(guild_name, "1v1" if mode == "1v1" else "2v2")
+                title = format_panel_title(guild_name, "1v1" if mode == "1v1" else "2v2" if mode == "2v2" else "3v3" if mode == "3v3" else "4v4")
                 embed = discord.Embed(title=title, color=EMBED_COLOR)
                 embed.add_field(name="Valor", value=valor_formatado, inline=True)
                 if mode == "1v1":
-                    embed.add_field(name="📱 1v1 MOB", value="0/2 —", inline=True)
-                    embed.add_field(name="💻 1v1 MISTO", value="0/2 —", inline=True)
-                else:
-                    embed.add_field(name="📱 2v2 MOB", value="T1 0/2 —\nT2 0/2 —", inline=True)
-                    embed.add_field(name="💻 2v2 MISTO", value="T1 0/2 —\nT2 0/2 —", inline=True)
-                view = Unified2v2PanelView() if mode == "2v2" else Unified1v1PanelView()
+                    embed.add_field(name="", value="0/2 —", inline=True)
+                    embed.add_field(name="", value="0/2 —", inline=True)
+                elif mode == "2v2":
+                    embed.add_field(name="", value="T1 0/2 —\nT2 0/2 —", inline=True)
+                    embed.add_field(name="", value="T1 0/2 —\nT2 0/2 —", inline=True)
+                elif mode == "3v3":
+                    embed.add_field(name="", value="T1 0/3 —\nT2 0/3 —", inline=True)
+                    embed.add_field(name="", value="T1 0/3 —\nT2 0/3 —", inline=True)
+                elif mode == "4v4":
+                    embed.add_field(name="", value="T1 0/4 —\nT2 0/4 —", inline=True)
+                    embed.add_field(name="", value="T1 0/4 —\nT2 0/4 —", inline=True)
+                view = Unified2v2PanelView() if mode == "2v2" else Unified1v1PanelView() if mode == "1v1" else Unified3v3PanelView() if mode == "3v3" else Unified4v4PanelView()
             else:
                 # Individual panel (only MOB or only MISTO)
                 title = format_panel_title(guild_name, format_mode_label(mode))
@@ -2608,6 +2738,14 @@ async def preset_filas(interaction: discord.Interaction, modo: app_commands.Choi
                 if is_2v2:
                     embed.add_field(name="T1", value="0/2 —", inline=True)
                     embed.add_field(name="T2", value="0/2 —", inline=True)
+                    view = TeamQueueButton(mode, valor_numerico, taxa_numerica, None, currency_type)
+                elif is_3v3:
+                    embed.add_field(name="T1", value="0/3 —", inline=True)
+                    embed.add_field(name="T2", value="0/3 —", inline=True)
+                    view = TeamQueueButton(mode, valor_numerico, taxa_numerica, None, currency_type)
+                elif is_4v4:
+                    embed.add_field(name="T1", value="0/4 —", inline=True)
+                    embed.add_field(name="T2", value="0/4 —", inline=True)
                     view = TeamQueueButton(mode, valor_numerico, taxa_numerica, None, currency_type)
                 else:
                     embed.add_field(name="Fila", value="0/2 —", inline=True)
@@ -2632,6 +2770,10 @@ async def preset_filas(interaction: discord.Interaction, modo: app_commands.Choi
             if not is_unified:
                 if is_2v2:
                     view.message_id = message.id
+                elif is_3v3:
+                    view.message_id = message.id
+                elif is_4v4:
+                    view.message_id = message.id
                 else:
                     view.message_id = message.id
 
@@ -2640,21 +2782,21 @@ async def preset_filas(interaction: discord.Interaction, modo: app_commands.Choi
             created_count += 1
 
         except Exception as e:
-            log(f"❌ Erro ao criar fila preset para valor {valor_numerico}: {e}")
+            log(f" Erro ao criar fila preset para valor {valor_numerico}: {e}")
             continue
 
     # AGORA adiciona os botões em todas as filas de uma vez (muito mais rápido!)
-    log(f"⚡ Adicionando botões em {len(tasks)} filas...")
+    log(f" Adicionando botões em {len(tasks)} filas...")
     for message, embed, view, valor_formatado in tasks:
         try:
             await message.edit(embed=embed, view=view)
-            log(f"✅ Botão adicionado em {valor_formatado}")
+            log(f" Botão adicionado em {valor_formatado}")
         except Exception as e:
-            log(f"❌ Erro ao adicionar botão em {valor_formatado}: {e}")
+            log(f" Erro ao adicionar botão em {valor_formatado}: {e}")
 
     # Confirma criação
     confirmation_msg = await interaction.followup.send(
-        f"✅ {created_count} filas criadas com sucesso!\n"
+        f" {created_count} filas criadas com sucesso!\n"
         f"Modo: {modo.name}\n"
         f"Moeda: {moeda.name}\n"
         f"Taxa: {taxa_str}",
@@ -2667,15 +2809,15 @@ async def preset_filas(interaction: discord.Interaction, modo: app_commands.Choi
     except:
         pass  # Mensagem já pode ter sido deletada
 
-    log(f"✅ Preset de filas concluído: {created_count} filas criadas")
+    log(f" Preset de filas concluído: {created_count} filas criadas")
 
 
 async def create_bet_channel(guild: discord.Guild, mode: str, player1_id: int, player2_id: int, bet_value: float, mediator_fee: float, source_channel_id: int = None, team1_ids: Optional[list[int]] = None, team2_ids: Optional[list[int]] = None, currency_type: str = None):
-    log(f"🔧 create_bet_channel chamada: mode={mode}, player1={player1_id}, player2={player2_id}, bet_value={bet_value}, mediator_fee={mediator_fee}")
+    log(f" create_bet_channel chamada: mode={mode}, player1={player1_id}, player2={player2_id}, bet_value={bet_value}, mediator_fee={mediator_fee}")
 
     # VALIDAÇÃO CRÍTICA: Nunca permitir valores zero
     if bet_value <= 0 or mediator_fee < 0:
-        log(f"❌ ERRO CRÍTICO: Valores inválidos - bet_value={bet_value}, mediator_fee={mediator_fee}. Abortando criação.")
+        log(f" ERRO CRÍTICO: Valores inválidos - bet_value={bet_value}, mediator_fee={mediator_fee}. Abortando criação.")
         return
 
     team1_ids = team1_ids or []
@@ -2685,28 +2827,28 @@ async def create_bet_channel(guild: discord.Guild, mode: str, player1_id: int, p
     # Validação dupla com lock para evitar race condition
     for uid in all_player_ids:
         if db.is_user_in_active_bet(uid):
-            log(f"❌ Um dos jogadores já está em uma aposta ativa. Abortando criação.")
+            log(f" Um dos jogadores já está em uma aposta ativa. Abortando criação.")
             return
 
     for uid in all_player_ids:
         db.remove_from_all_queues(uid)
-    log(f"✅ Jogadores removidos de todas as filas")
+    log(f" Jogadores removidos de todas as filas")
 
     try:
         # Usa get_member ao invés de fetch_member (mais rápido, sem API call)
-        log(f"🔍 Buscando membros do servidor...")
+        log(f" Buscando membros do servidor...")
         player1 = guild.get_member(player1_id)
         player2 = guild.get_member(player2_id)
 
         # Se não encontrou no cache, só então faz fetch
         if not player1:
-            log(f"🔄 Player1 não no cache, fazendo fetch...")
+            log(f" Player1 não no cache, fazendo fetch...")
             player1 = await guild.fetch_member(player1_id)
         if not player2:
-            log(f"🔄 Player2 não no cache, fazendo fetch...")
+            log(f" Player2 não no cache, fazendo fetch...")
             player2 = await guild.fetch_member(player2_id)
 
-        log(f"✅ Jogadores encontrados: {player1.name} e {player2.name}")
+        log(f" Jogadores encontrados: {player1.name} e {player2.name}")
 
         extra_members: list[discord.Member] = []
         if is_2v2_mode(mode):
@@ -2718,50 +2860,50 @@ async def create_bet_channel(guild: discord.Guild, mode: str, player1_id: int, p
                 extra_members.append(m)
 
         # Busca o canal de origem (onde foi usado /mostrar-fila)
-        log(f"🔍 Buscando canal de origem: {source_channel_id}")
+        log(f" Buscando canal de origem: {source_channel_id}")
         source_channel = guild.get_channel(source_channel_id) if source_channel_id else None
 
         if not source_channel:
-            log(f"❌ Canal de origem {source_channel_id} não encontrado. Abortando criação.")
+            log(f" Canal de origem {source_channel_id} não encontrado. Abortando criação.")
             db.add_to_queue(mode, player1_id)
             db.add_to_queue(mode, player2_id)
             return
 
-        log(f"✅ Canal de origem encontrado: {source_channel.name}")
+        log(f" Canal de origem encontrado: {source_channel.name}")
 
         # Criar tópico ao invés de canal
         if is_2v2_mode(mode):
             thread_name = "Aposta: Time 1 vs Time 2"
         else:
             thread_name = f"Aposta: {player1.name} vs {player2.name}"
-        log(f"🏗️ Tentando criar tópico: {thread_name}")
+        log(f" Tentando criar tópico: {thread_name}")
 
         try:
             # Cria um tópico privado
-            log(f"🔐 Tentando criar tópico PRIVADO...")
+            log(f" Tentando criar tópico PRIVADO...")
             thread = await source_channel.create_thread(
                 name=thread_name,
                 type=discord.ChannelType.private_thread,
                 auto_archive_duration=1440,  # 24 horas
                 invitable=False
             )
-            log(f"✅ Tópico PRIVADO criado: {thread_name} (ID: {thread.id})")
+            log(f" Tópico PRIVADO criado: {thread_name} (ID: {thread.id})")
         except discord.Forbidden as e:
-            log(f"❌ Sem permissão para criar tópico privado: {e}")
-            log(f"🔄 Tentando criar tópico PÚBLICO como fallback...")
+            log(f" Sem permissão para criar tópico privado: {e}")
+            log(f" Tentando criar tópico PÚBLICO como fallback...")
             try:
                 # Fallback: tentar criar tópico público
                 thread = await source_channel.create_thread(
                     name=thread_name,
                     auto_archive_duration=1440
                 )
-                log(f"✅ Tópico PÚBLICO criado: {thread_name} (ID: {thread.id})")
+                log(f" Tópico PÚBLICO criado: {thread_name} (ID: {thread.id})")
             except Exception as e:
-                log(f"❌ Erro ao criar tópico público: {e}")
+                log(f" Erro ao criar tópico público: {e}")
                 logger.exception("Stacktrace:")
                 raise
         except Exception as e:
-            log(f"❌ Erro inesperado ao criar tópico: {e}")
+            log(f" Erro inesperado ao criar tópico: {e}")
             logger.exception("Stacktrace:")
             raise
 
@@ -2771,9 +2913,9 @@ async def create_bet_channel(guild: discord.Guild, mode: str, player1_id: int, p
             await thread.add_user(player2)
             for m in extra_members:
                 await thread.add_user(m)
-            log(f"✅ Jogadores adicionados ao tópico")
+            log(f" Jogadores adicionados ao tópico")
         except Exception as e:
-            log(f"⚠️ Erro ao adicionar jogadores ao tópico: {e}")
+            log(f" Erro ao adicionar jogadores ao tópico: {e}")
 
         # Configura permissões para os jogadores enviarem mensagens e anexarem arquivos
         try:
@@ -2803,7 +2945,7 @@ async def create_bet_channel(guild: discord.Guild, mode: str, player1_id: int, p
             # Aplica permissões ao thread
             for member, overwrite in overwrites.items():
                 await thread.set_permissions(member, overwrite=overwrite)
-            log(f"✅ Permissões configuradas para os jogadores no tópico")
+            log(f" Permissões configuradas para os jogadores no tópico")
         except Exception as e:
             log(f" Erro ao configurar permissões do tópico: {e}")
 
@@ -3030,10 +3172,16 @@ async def create_bet_channel(guild: discord.Guild, mode: str, player1_id: int, p
 @app_commands.choices(modo=[
     app_commands.Choice(name="Painel 1v1", value="1v1"),
     app_commands.Choice(name="Painel 2v2", value="2v2"),
+    app_commands.Choice(name="Painel 3v3", value="3v3"),
+    app_commands.Choice(name="Painel 4v4", value="4v4"),
     app_commands.Choice(name="1v1 MOB", value="1v1-mob"),
     app_commands.Choice(name="1v1 MISTO", value="1v1-misto"),
     app_commands.Choice(name="2v2 MOB", value="2v2-mob"),
     app_commands.Choice(name="2v2 MISTO", value="2v2-misto"),
+    app_commands.Choice(name="3v3 MOB", value="3v3-mob"),
+    app_commands.Choice(name="3v3 MISTO", value="3v3-misto"),
+    app_commands.Choice(name="4v4 MOB", value="4v4-mob"),
+    app_commands.Choice(name="4v4 MISTO", value="4v4-misto"),
 ])
 @app_commands.choices(moeda=[
     app_commands.Choice(name="Dinheiro", value="reais"),
@@ -4422,71 +4570,84 @@ async def run_bot_with_token():
         await bot.start(token, reconnect=True)
         return
     
-    # Caso contrário, verifica TOKEN_1 e TOKEN_2
-    token1 = os.getenv("TOKEN_1")
-    token2 = os.getenv("TOKEN_2")
+    # Caso contrário, verifica múltiplos tokens (TOKEN_1 a TOKEN_5)
+    tokens = []
+    for i in range(1, 6):  # TOKEN_1 a TOKEN_5
+        token = os.getenv(f"TOKEN_{i}")
+        if token:
+            tokens.append(token)
     
-    if not token1:
+    if not tokens:
         raise Exception("Configure TOKEN, DISCORD_TOKEN ou TOKEN_1 nas variáveis de ambiente.")
     
-    # Se só tem TOKEN_1, roda 1 bot
-    if not token2:
+    # Se só tem 1 token, roda 1 bot
+    if len(tokens) == 1:
         log("🤖 Iniciando bot Discord (token único via TOKEN_1)...")
-        await bot.start(token1, reconnect=True)
+        await bot.start(tokens[0], reconnect=True)
         return
     
-    # Se tem TOKEN_1 e TOKEN_2, roda 2 bots em paralelo
-    log("🤖 Detectados 2 tokens (TOKEN_1 e TOKEN_2) - iniciando 2 bots em paralelo...")
+    # Se tem múltiplos tokens, roda bots em paralelo
+    log(f"🤖 Detectados {len(tokens)} tokens (TOKEN_1 a TOKEN_{len(tokens)}) - iniciando {len(tokens)} bots em paralelo...")
     
-    # Criar segunda instância do bot
-    bot2 = create_bot_instance()
+    # Criar instâncias adicionais dos bots
+    bot_instances = [bot]  # bot1 já existe
+    for i in range(1, len(tokens)):
+        bot_instance = create_bot_instance()
+        bot_instances.append(bot_instance)
+        log(f"📋 Criada instância do bot #{i+1}")
     
-    # Registrar todos os comandos no bot2
-    log("📋 Registrando comandos no segundo bot...")
-    register_all_commands(bot2)
-    log(f"✅ Comandos registrados no bot2")
+    # Registrar comandos em todos os bots adicionais
+    for i, bot_instance in enumerate(bot_instances[1:], start=2):
+        log(f"📋 Registrando comandos no bot #{i}...")
+        register_all_commands(bot_instance)
+        log(f"✅ Comandos registrados no bot #{i}")
     
-    # Criar event handler on_ready específico para bot2
-    @bot2.event
-    async def on_ready():
-        log("=" * 50)
-        log("✅ BOT #2 CONECTADO AO DISCORD!")
-        log("=" * 50)
-        log(f'👤 Usuário: {bot2.user}')
-        log(f'📛 Nome: {bot2.user.name}')
-        log(f'🆔 ID: {bot2.user.id}')
-        log(f'🌐 Servidores: {len(bot2.guilds)}')
-        
-        # Sincronizar comandos do bot2
-        try:
-            log("🔄 Bot #2: Sincronizando comandos slash...")
-            synced = await bot2.tree.sync(guild=None)
-            log(f'✅ Bot #2: {len(synced)} comandos sincronizados')
-            for cmd in synced:
-                log(f'  - /{cmd.name}')
-        except Exception as e:
-            log(f'⚠️ Bot #2: Erro ao sincronizar comandos: {e}')
+    # Criar event handlers on_ready para todos os bots adicionais
+    for i, bot_instance in enumerate(bot_instances[1:], start=2):
+        @bot_instance.event
+        async def on_ready(bot_idx=i):
+            log("=" * 50)
+            log(f"✅ BOT #{bot_idx} CONECTADO AO DISCORD!")
+            log("=" * 50)
+            log(f'👤 Usuário: {bot_instance.user}')
+            log(f'📛 Nome: {bot_instance.user.name}')
+            log(f'🆔 ID: {bot_instance.user.id}')
+            log(f'🌐 Servidores: {len(bot_instance.guilds)}')
+            
+            # Sincronizar comandos
+            try:
+                log(f"🔄 Bot #{bot_idx}: Sincronizando comandos slash...")
+                synced = await bot_instance.tree.sync(guild=None)
+                log(f'✅ Bot #{bot_idx}: {len(synced)} comandos sincronizados')
+                for cmd in synced:
+                    log(f'  - /{cmd.name}')
+            except Exception as e:
+                log(f'⚠️ Bot #{bot_idx}: Erro ao sincronizar comandos: {e}')
     
-    # Adicionar views persistentes para bot2
-    bot2.add_view(QueueButton(mode="", bet_value=0, mediator_fee=0, currency_type="sonhos"))
-    bot2.add_view(TeamQueueButton(mode="2v2-misto", bet_value=0, mediator_fee=0, currency_type="sonhos"))
-    bot2.add_view(Unified1v1PanelView())
-    bot2.add_view(Unified2v2PanelView())
-    bot2.add_view(ConfirmPaymentButton(bet_id=""))
-    bot2.add_view(AcceptMediationButton(bet_id=""))
+    # Adicionar views persistentes para todos os bots adicionais
+    for i, bot_instance in enumerate(bot_instances[1:], start=2):
+        bot_instance.add_view(QueueButton(mode="", bet_value=0, mediator_fee=0, currency_type="sonhos"))
+        bot_instance.add_view(TeamQueueButton(mode="2v2-misto", bet_value=0, mediator_fee=0, currency_type="sonhos"))
+        bot_instance.add_view(Unified1v1PanelView())
+        bot_instance.add_view(Unified2v2PanelView())
+        bot_instance.add_view(ConfirmPaymentButton(bet_id=""))
+        bot_instance.add_view(AcceptMediationButton(bet_id=""))
+        log(f"📋 Views persistentes adicionadas ao bot #{i}")
     
     # Funções auxiliares para iniciar cada bot
-    async def start_bot1():
-        log("🤖 Bot #1: Conectando ao Discord...")
-        await bot.start(token1, reconnect=True)
+    async def start_bot(bot_instance, token, bot_idx):
+        log(f"🤖 Bot #{bot_idx}: Conectando ao Discord...")
+        await bot_instance.start(token, reconnect=True)
     
-    async def start_bot2():
-        log("🤖 Bot #2: Conectando ao Discord...")
-        await bot2.start(token2, reconnect=True)
+    # Criar tarefas para todos os bots
+    tasks = []
+    for i, (bot_instance, token) in enumerate(zip(bot_instances, tokens), start=1):
+        task = start_bot(bot_instance, token, i)
+        tasks.append(task)
     
-    # Rodar ambos em paralelo
-    log("🚀 Iniciando ambos os bots...")
-    await asyncio.gather(start_bot1(), start_bot2())
+    # Rodar todos em paralelo
+    log("🚀 Iniciando todos os bots...")
+    await asyncio.gather(*tasks)
 
 try:
     if IS_FLYIO:
